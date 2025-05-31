@@ -1167,7 +1167,7 @@ static __init int cpufreq_read_mif_min(char *mif_min)
 }
 __setup("mif_min=", cpufreq_read_mif_min);
 
-unsigned long arg_cpu_max_c1 = 1950000;
+unsigned long arg_cpu_max_c1 = 1794000;
 
 static int __init cpufreq_read_cpu_max_c1(char *cpu_max_c1)
 {
@@ -1184,7 +1184,11 @@ static int __init cpufreq_read_cpu_max_c1(char *cpu_max_c1)
 }
 __setup("cpu_max_c1=", cpufreq_read_cpu_max_c1);
 
+<<<<<<< HEAD
 unsigned long arg_cpu_max_c2 = 2002000;
+=======
+unsigned long arg_cpu_max_c2 = 2704000;
+>>>>>>> parent of 4b6e151b34c6 (dts/defconfig/exynos-acme: Nuke Hotplug)
 
 static __init int cpufreq_read_cpu_max_c2(char *cpu_max_c2)
 {
