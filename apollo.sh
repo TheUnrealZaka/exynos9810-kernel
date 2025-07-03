@@ -87,7 +87,24 @@ DEFAULT_SUSFS=y    # enabled (recommended for root concealment)
 DEFAULT_CLEAN=n    # dirty
 #####################################################
 
-# KernelSU-Next and SuSFS Setup Functions
+# KernelSU, KernelSU-Next and SuSFS Setup Functions
+SETUP_KSU()
+{
+    echo "----------------------------------------------"
+    echo " Setting up KernelSU (Classic)"
+    
+    # Run KernelSU setup script
+    echo " Running KernelSU setup script..."
+    curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+    
+    if [ $? -ne 0 ]; then
+        echo " Failed to setup KernelSU"
+        exit 1
+    fi
+    
+    echo " KernelSU setup completed"
+}
+
 SETUP_KSU_NEXT()
 {
     echo "----------------------------------------------"
@@ -161,13 +178,11 @@ CLEAN_KSU_SUSFS()
     if [ -L "drivers/kernelsu" ]; then
         rm -f drivers/kernelsu
     fi
-}
-
-CLEAN_KSU_SUSFS()
-{
-    echo " Cleaning KernelSU/SuSFS setup..."
-    if [ -L "drivers/kernelsu" ]; then
-        rm -f drivers/kernelsu
+    if [ -d "KernelSU" ]; then
+        rm -rf KernelSU
+    fi
+    if [ -d "KernelSU-Next" ]; then
+        rm -rf KernelSU-Next
     fi
 }
 
@@ -446,7 +461,8 @@ BUILD_GENERATE_CONFIG()
   
   # KernelSU Configuration
   if [[ "$CR_KSU" =~ ^[yY]$ ]]; then
-    echo " Building with KernelSU"
+    echo " Building with KernelSU (Classic)"
+    SETUP_KSU
     echo "CONFIG_KSU=y" >> $CR_DEFCONFIG/tmp_defconfig
     CR_IMAGE_NAME=$CR_IMAGE_NAME-KSU
     zver=$zver-KernelSU
@@ -835,9 +851,26 @@ BUILD_AUTOMATED()
     CR_TARGET=${CR_TARGET:-$DEFAULT_TARGET}
     CR_COMPILER=${CR_COMPILER:-4}  # Default to Clang 20 for One UI 7
     CR_SELINUX=${CR_SELINUX:-$DEFAULT_SELINUX}
-    CR_KSU=${CR_KSU:-$DEFAULT_KSU}
-    CR_KSU_NEXT=${CR_KSU_NEXT:-$DEFAULT_KSU_NEXT}
-    CR_SUSFS=${CR_SUSFS:-$DEFAULT_SUSFS}
+    
+    # Handle KSU flags from environment variables
+    if [ -n "$CR_KSU" ]; then
+        CR_KSU=$CR_KSU
+    else
+        CR_KSU=$DEFAULT_KSU
+    fi
+    
+    if [ -n "$CR_KSU_NEXT" ]; then
+        CR_KSU_NEXT=$CR_KSU_NEXT
+    else
+        CR_KSU_NEXT=$DEFAULT_KSU_NEXT
+    fi
+    
+    if [ -n "$CR_SUSFS" ]; then
+        CR_SUSFS=$CR_SUSFS
+    else
+        CR_SUSFS=$DEFAULT_SUSFS
+    fi
+    
     CR_CLEAN=${CR_CLEAN:-$DEFAULT_CLEAN}
     
     echo "----------------------------------------------"

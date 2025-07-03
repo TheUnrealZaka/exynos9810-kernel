@@ -40,7 +40,7 @@ jobs:
           { version: "oneui7", name: "OneUI7" }
         ]
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 5
 
     name: Build All Devices ${{ matrix.selinux.name }} ${{ matrix.root_solution.name }} ${{ matrix.oneui.name }} ZIP
 

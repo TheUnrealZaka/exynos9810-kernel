@@ -246,7 +246,10 @@ source "drivers/security/samsung/icdrv/Kconfig"
 
 source "drivers/security/samsung/tzic/Kconfig"
 
+# KernelSU support (only include if KernelSU is enabled)
+if KSU
 source "drivers/kernelsu/Kconfig"
+endif
 
 source "drivers/extremerom/Kconfig"
 
