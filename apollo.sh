@@ -137,31 +137,22 @@ SETUP_SUSFS()
         echo " SuSFS already exists"
     fi
 
-    # Copy all files from kernel_patches directory to root project
-    if [ -d "susfs4ksu/kernel_patches" ]; then
-        echo " Copying SuSFS patch files to root directory..."
-        cp -r susfs4ksu/kernel_patches/* ./
-        echo " SuSFS patch files copied"
-        
-        echo " Applying SuSFS patches..."
-        # Apply SuSFS patches to kernel source from root directory
-        for patch in *.patch; do
-            if [ -f "$patch" ]; then
-                echo " Applying patch: $patch"
-                patch -p1 < "$patch"
-                if [ $? -eq 0 ]; then
-                    echo " Patch $patch applied successfully"
-                else
-                    echo " Failed to apply patch: $patch"
-                    exit 1
-                fi
-            fi
-        done
-        echo " SuSFS patches applied"
+    # Apply the correct SuSFS patch for kernel 4.9
+    if [ -f "Apollo/Patches/0002_enable_susfs_for_kernel_4.9.patch" ]; then
+        echo " Applying SuSFS kernel patch for 4.9..."
+        patch -p1 < "Apollo/Patches/0002_enable_susfs_for_kernel_4.9.patch"
+        if [ $? -eq 0 ]; then
+            echo " SuSFS kernel patch applied successfully"
+        else
+            echo " Failed to apply SuSFS kernel patch"
+            exit 1
+        fi
     else
-        echo " SuSFS patches directory not found"
+        echo " SuSFS kernel patch file not found"
         exit 1
     fi
+    
+    echo " SuSFS setup completed"
 }
 
 CLEAN_KSU_SUSFS()
@@ -170,19 +161,6 @@ CLEAN_KSU_SUSFS()
     if [ -L "drivers/kernelsu" ]; then
         rm -f drivers/kernelsu
     fi
-    
-    # Clean up any copied patch files from SuSFS
-    if [ -d "susfs4ksu/kernel_patches" ]; then
-        cd susfs4ksu/kernel_patches
-        for patch in *.patch; do
-            if [ -f "../../$patch" ]; then
-                rm -f "../../$patch"
-            fi
-        done
-        cd ../../
-    fi
-    
-    # Note: Applied patches to source remain as they modify the kernel directly
 }
 
 CLEAN_KSU_SUSFS()
@@ -191,7 +169,6 @@ CLEAN_KSU_SUSFS()
     if [ -L "drivers/kernelsu" ]; then
         rm -f drivers/kernelsu
     fi
-    # Note: SuSFS patches are applied to source, so we don't remove them during clean
 }
 
 # Compiler Selection
