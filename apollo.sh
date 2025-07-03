@@ -74,14 +74,125 @@ CR_CONFIG_INTL=eur_defconfig
 CR_CONFIG_KOR=kor_defconfig
 CR_SELINUX="2"
 CR_KSU="n"
+CR_KSU_NEXT="n"
+CR_SUSFS="n"
 CR_CLEAN="n"
 # Default Compilation
-DEFAULT_TARGET=3   # crownlte
-DEFAULT_COMPILER=3 # clang18
+DEFAULT_TARGET=7   # Build All (All Devices ZIP)
+DEFAULT_COMPILER=4 # clang20 (Google Clang 20.0.0 - Best for One UI 7)
 DEFAULT_SELINUX=2  # enforce
-DEFAULT_KSU=y      # enabled
+DEFAULT_KSU=n      # disabled
+DEFAULT_KSU_NEXT=y # enabled (recommended)
+DEFAULT_SUSFS=y    # enabled (recommended for root concealment)
 DEFAULT_CLEAN=n    # dirty
 #####################################################
+
+# KernelSU-Next and SuSFS Setup Functions
+SETUP_KSU_NEXT()
+{
+    echo "----------------------------------------------"
+    echo " Setting up KernelSU-Next"
+    
+    # Run KernelSU-Next setup script
+    echo " Running KernelSU-Next setup script..."
+    curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+    
+    if [ $? -ne 0 ]; then
+        echo " Failed to setup KernelSU-Next"
+        exit 1
+    fi
+    
+    # Apply the KernelSU-Next + SuSFS patch if it exists
+    if [ -f "Apollo/Patches/0001-kernel-implement-susfs-v1.5.8-KernelSU-Next-v1.0.8.patch" ]; then
+        echo " Applying KernelSU-Next + SuSFS integration patch..."
+        cd KernelSU-Next
+        patch -p1 < ../Apollo/Patches/0001-kernel-implement-susfs-v1.5.8-KernelSU-Next-v1.0.8.patch
+        if [ $? -eq 0 ]; then
+            echo " KernelSU-Next + SuSFS patch applied successfully"
+        else
+            echo " Failed to apply KernelSU-Next + SuSFS patch"
+            exit 1
+        fi
+        cd ..
+    else
+        echo " KernelSU-Next + SuSFS patch file not found, continuing without it"
+    fi
+    
+    echo " KernelSU-Next setup completed"
+}
+
+SETUP_SUSFS()
+{
+    echo "----------------------------------------------"
+    echo " Setting up SuSFS"
+    if [ ! -d "susfs4ksu" ]; then
+        echo " Downloading SuSFS..."
+        git clone https://gitlab.com/simonpunk/susfs4ksu.git --branch kernel-4.9 --single-branch
+        if [ $? -ne 0 ]; then
+            echo " Failed to download SuSFS"
+            exit 1
+        fi
+        echo " SuSFS downloaded successfully"
+    else
+        echo " SuSFS already exists"
+    fi
+
+    # Copy all files from kernel_patches directory to root project
+    if [ -d "susfs4ksu/kernel_patches" ]; then
+        echo " Copying SuSFS patch files to root directory..."
+        cp -r susfs4ksu/kernel_patches/* ./
+        echo " SuSFS patch files copied"
+        
+        echo " Applying SuSFS patches..."
+        # Apply SuSFS patches to kernel source from root directory
+        for patch in *.patch; do
+            if [ -f "$patch" ]; then
+                echo " Applying patch: $patch"
+                patch -p1 < "$patch"
+                if [ $? -eq 0 ]; then
+                    echo " Patch $patch applied successfully"
+                else
+                    echo " Failed to apply patch: $patch"
+                    exit 1
+                fi
+            fi
+        done
+        echo " SuSFS patches applied"
+    else
+        echo " SuSFS patches directory not found"
+        exit 1
+    fi
+}
+
+CLEAN_KSU_SUSFS()
+{
+    echo " Cleaning KernelSU/SuSFS setup..."
+    if [ -L "drivers/kernelsu" ]; then
+        rm -f drivers/kernelsu
+    fi
+    
+    # Clean up any copied patch files from SuSFS
+    if [ -d "susfs4ksu/kernel_patches" ]; then
+        cd susfs4ksu/kernel_patches
+        for patch in *.patch; do
+            if [ -f "../../$patch" ]; then
+                rm -f "../../$patch"
+            fi
+        done
+        cd ../../
+    fi
+    
+    # Note: Applied patches to source remain as they modify the kernel directly
+}
+
+CLEAN_KSU_SUSFS()
+{
+    echo " Cleaning KernelSU/SuSFS setup..."
+    if [ -L "drivers/kernelsu" ]; then
+        rm -f drivers/kernelsu
+    fi
+    # Note: SuSFS patches are applied to source, so we don't remove them during clean
+}
 
 # Compiler Selection
 BUILD_COMPILER()
@@ -118,6 +229,7 @@ CR_CLANG_URL=https://github.com/Neutron-Toolchains/clang-build-catalogue/release
 CR_CLANG=$CR_TC/neutron-clang-19.0.0
 fi
 if [ $CR_COMPILER = "7" ]; then
+CR_CLANG_URL=https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/15052024/neutron-clang-15052024.tar.zst
 CR_CLANG=$CR_TC/neutron-clang-20.0.0
 fi
 if [ $CR_COMPILER = "8" ]; then
@@ -125,51 +237,71 @@ CR_CLANG=$CR_TC/clang-custom
 fi
 
 if [ $CR_COMPILER != "8" ]; then
-	if [ ! -d "$CR_CLANG/bin" ] || [ ! -d "$CR_CLANG/lib" ]; then
-		echo " "
-		echo " $CR_CLANG compiler is missing"
-		echo " "
-		echo " "
-		read -p "Download Toolchain ? (y/n) > " TC_DL
-		if [ $TC_DL = "y" ]; then
-			echo "Checking URL validity..."
-			URL=$CR_CLANG_URL
-			if curl --output /dev/null --silent --head --fail "$URL"; then
-				echo "URL exists: $URL"
-				echo "Downloading $CR_CLANG"
-				if [ ! -e $CR_TC ]; then
-					mkdir $CR_TC
-				fi
-				if [ ! -e $CR_CLANG ]; then
-					mkdir $CR_CLANG
-				else
-					# Remove incomplete
-					rm -rf $CR_CLANG
-					mkdir $CR_CLANG
-				fi
-				wget -qO- $URL | tar --use-compress-program=unzstd -xv -C $CR_CLANG
-				if [ $? -ne 0 ]; then
-					echo "Download failed or was incomplete"
-					echo "Setup Compiler and try again"
-					exit 0;
-				fi
-				# Neutron Needs patches
-				if [ $CR_COMPILER = "5" ] || [ $CR_COMPILER = "6" ]; then
-					cd $CR_CLANG
-					bash <(curl -s "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman") --patch=glibc
-					cd $CR_DIR
-				fi
-				echo "Compiler Downloaded."
-			else
-				echo "Invalid URL: $URL"
-				exit 0;
-			fi
-		else
-			echo " Aborting "
-			echo " Setup Compiler and try again"
-			exit 0;
-		fi
-	fi
+    if [ ! -d "$CR_CLANG/bin" ] || [ ! -d "$CR_CLANG/lib" ]; then
+        echo " "
+        echo " $CR_CLANG compiler is missing"
+        echo " "
+        echo " Automatically downloading toolchain..."
+        
+        URL=$CR_CLANG_URL
+        if curl --output /dev/null --silent --head --fail "$URL"; then
+            echo "URL exists: $URL"
+            echo "Downloading $CR_CLANG"
+            if [ ! -e $CR_TC ]; then
+                mkdir $CR_TC
+            fi
+            if [ ! -e $CR_CLANG ]; then
+                mkdir $CR_CLANG
+            else
+                # Remove incomplete
+                rm -rf $CR_CLANG
+                mkdir $CR_CLANG
+            fi
+            
+            # Determine extraction method based on file extension
+            if [[ "$URL" == *.tar.zst ]]; then
+                # For .tar.zst files (Neutron toolchains)
+                wget -qO- $URL | tar --use-compress-program=unzstd -xv -C $CR_CLANG
+            else
+                # For .tar.gz files (Google toolchains)
+                wget -qO- $URL | tar -xzv -C $CR_CLANG
+            fi
+            
+            if [ $? -ne 0 ]; then
+                echo "Download failed or was incomplete"
+                echo "Retrying with alternative method..."
+                rm -rf $CR_CLANG
+                mkdir $CR_CLANG
+                
+                # Alternative download method
+                wget -O toolchain_temp.tar "$URL"
+                if [[ "$URL" == *.tar.zst ]]; then
+                    tar --use-compress-program=unzstd -xvf toolchain_temp.tar -C $CR_CLANG
+                else
+                    tar -xzf toolchain_temp.tar -C $CR_CLANG
+                fi
+                rm -f toolchain_temp.tar
+                
+                if [ $? -ne 0 ]; then
+                    echo "Download failed completely"
+                    echo "Setup Compiler and try again"
+                    exit 0;
+                fi
+            fi
+            
+            # Neutron Needs patches
+            if [ $CR_COMPILER = "5" ] || [ $CR_COMPILER = "6" ] || [ $CR_COMPILER = "7" ]; then
+                cd $CR_CLANG
+                bash <(curl -s "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman") --patch=glibc
+                cd $CR_DIR
+            fi
+            echo "Compiler Downloaded automatically."
+        else
+            echo "Invalid URL: $URL"
+            echo "Please check your internet connection and try again"
+            exit 0;
+        fi
+    fi
 else
     if [ ! -d "$CR_CLANG/bin" ] || [ ! -d "$CR_CLANG/lib" ]; then
         echo "clang-custom compiler is missing in $CR_TC/clang-custom"
@@ -184,6 +316,14 @@ export CONFIG_UNIFIEDLTO=y
 export CONFIG_LLVM_MLGO_REGISTER=y
 export CONFIG_LLVM_POLLY=y
 export CONFIG_LLVM_DFA_JUMP_THREAD=y
+fi
+
+# Additional optimizations for Clang 20 (One UI 7 optimized)
+if [ $CR_COMPILER = "4" ]; then
+echo "Enabling Clang 20 One UI 7 optimizations..."
+export CONFIG_LTO_CLANG_FULL=y
+export CONFIG_CFI_CLANG=y
+export CONFIG_SHADOW_CALL_STACK=y
 fi
 
 export PATH=$CR_CLANG/bin:$CR_CLANG/lib:${PATH}
@@ -217,6 +357,7 @@ if [[ "$CR_CLEAN" =~ ^[yY]$ ]]; then
      rm -rf $CR_DIR/.config
      rm -rf $CR_OUT/*.img
      rm -rf $CR_OUT/*.zip
+     CLEAN_KSU_SUSFS
 else
      rm -r -f $CR_DTB
      rm -r -f $CR_KERNEL
@@ -232,42 +373,59 @@ fi
 
 BUILD_IMAGE_NAME()
 {
-	CR_IMAGE_NAME=$CR_NAME-$CR_VERSION-$CR_VARIANT-$CR_DATE
-	zver=$CR_NAME-$CR_VERSION-$CR_DATE
+    CR_IMAGE_NAME=$CR_NAME-$CR_VERSION-$CR_VARIANT-$CR_DATE
+    zver=$CR_NAME-$CR_VERSION-$CR_DATE
     
 }
 
 # Build options
 BUILD_OPTIONS()
 {
-	# KSU Version
-	KSU_VERSION=$( [ -f "drivers/kernelsu/Makefile" ] && grep -oP '(?<=-DKSU_VERSION=)[0-9]+' drivers/kernelsu/Makefile )
-	echo "----------------------------------------------"
-	echo " Apollo Kernel Build Options "
-	echo " "
-	echo " Kernel		- $CR_IMAGE_NAME"
-	echo " Device		- $CR_VARIANT"
-	echo " Compiler	- $CR_COMPILER_ARG"
-	if [[ "$CR_CLEAN" =~ ^[yY]$ ]]; then
-		echo " Env		- Clean Build"
-	else
-		echo " Env		- Dirty Build"
-	fi
-	if [ $CR_SELINUX = "1" ]; then
-		echo " SELinux	- Permissive"
-	else
-		echo " SELinux	- Enforcing"
-	fi
-	if [[ "$CR_KSU" =~ ^[yY]$ ]]; then
-		if [ -n "$KSU_VERSION" ]; then
-		echo " KernelSU	- Version: $KSU_VERSION"
-		else
-		echo " KernelSU	- Enabled"
-		fi
-	else
-		echo " KernelSU	- Disabled"
-	fi
-	echo " "
+    # KSU Version Detection
+    KSU_VERSION=""
+    if [[ "$CR_KSU" =~ ^[yY]$ ]]; then
+        KSU_VERSION=$( [ -f "drivers/kernelsu/Makefile" ] && grep -oP '(?<=-DKSU_VERSION=)[0-9]+' drivers/kernelsu/Makefile )
+    elif [[ "$CR_KSU_NEXT" =~ ^[yY]$ ]]; then
+        KSU_VERSION=$( [ -f "drivers/kernelsu/Makefile" ] && grep -oP '(?<=-DKSU_VERSION=)[0-9]+' drivers/kernelsu/Makefile )
+    fi
+    
+    echo "----------------------------------------------"
+    echo " Apollo Kernel Build Options "
+    echo " "
+    echo " Kernel		- $CR_IMAGE_NAME"
+    echo " Device		- $CR_VARIANT"
+    echo " Compiler	- $CR_COMPILER_ARG"
+    if [[ "$CR_CLEAN" =~ ^[yY]$ ]]; then
+        echo " Env		- Clean Build"
+    else
+        echo " Env		- Dirty Build"
+    fi
+    if [ $CR_SELINUX = "1" ]; then
+        echo " SELinux	- Permissive"
+    else
+        echo " SELinux	- Enforcing"
+    fi
+    if [[ "$CR_KSU" =~ ^[yY]$ ]]; then
+        if [ -n "$KSU_VERSION" ]; then
+        echo " KernelSU	- Version: $KSU_VERSION"
+        else
+        echo " KernelSU	- Enabled"
+        fi
+    elif [[ "$CR_KSU_NEXT" =~ ^[yY]$ ]]; then
+        if [ -n "$KSU_VERSION" ]; then
+        echo " KernelSU-Next	- Version: $KSU_VERSION"
+        else
+        echo " KernelSU-Next	- Enabled"
+        fi
+    else
+        echo " KernelSU	- Disabled"
+    fi
+    if [[ "$CR_SUSFS" =~ ^[yY]$ ]]; then
+        echo " SuSFS		- Enabled"
+    else
+        echo " SuSFS		- Disabled"
+    fi
+    echo " "
 }
 
 # Config Generation Function
@@ -308,13 +466,40 @@ BUILD_GENERATE_CONFIG()
   else
     echo " Building SELinux Enforced Kernel"
   fi
+  
+  # KernelSU Configuration
   if [[ "$CR_KSU" =~ ^[yY]$ ]]; then
-    echo " Building KernelSU"
+    echo " Building with KernelSU"
     echo "CONFIG_KSU=y" >> $CR_DEFCONFIG/tmp_defconfig
     CR_IMAGE_NAME=$CR_IMAGE_NAME-KSU
     zver=$zver-KernelSU
+  elif [[ "$CR_KSU_NEXT" =~ ^[yY]$ ]]; then
+    echo " Building with KernelSU-Next"
+    SETUP_KSU_NEXT
+    echo "CONFIG_KSU=y" >> $CR_DEFCONFIG/tmp_defconfig
+    CR_IMAGE_NAME=$CR_IMAGE_NAME-KSU-Next
+    zver=$zver-KernelSU-Next
   else
     echo "# CONFIG_KSU is not set" >> $CR_DEFCONFIG/tmp_defconfig
+  fi
+  
+  # SuSFS Configuration
+  if [[ "$CR_SUSFS" =~ ^[yY]$ ]]; then
+    echo " Building with SuSFS"
+    SETUP_SUSFS
+    echo "CONFIG_SUSFS=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_SUSFS_FMASK=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_SUSFS_OPEN_REDIRECT=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_SUSFS_SUS_MOUNT=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_SUSFS_SUS_KSTAT=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_SUSFS_SUS_OVERLAYFS=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_SUSFS_TRY_UMOUNT=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_SUSFS_SPOOF_UNAME=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_SUSFS_SUS_SU=y" >> $CR_DEFCONFIG/tmp_defconfig
+    CR_IMAGE_NAME=$CR_IMAGE_NAME-SuSFS
+    zver=$zver-SuSFS
+  else
+    echo "# CONFIG_SUSFS is not set" >> $CR_DEFCONFIG/tmp_defconfig
   fi
   echo " $CR_VARIANT config generated "
   echo " "
@@ -325,22 +510,32 @@ BUILD_GENERATE_CONFIG()
 BUILD_OUT()
 {
 # KSU Version
-	KSU_VERSION=$( [ -f "drivers/kernelsu/Makefile" ] && grep -oP '(?<=-DKSU_VERSION=)[0-9]+' drivers/kernelsu/Makefile )
+    KSU_VERSION=""
+    if [[ "$CR_KSU" =~ ^[yY]$ ]] || [[ "$CR_KSU_NEXT" =~ ^[yY]$ ]]; then
+        KSU_VERSION=$( [ -f "drivers/kernelsu/Makefile" ] && grep -oP '(?<=-DKSU_VERSION=)[0-9]+' drivers/kernelsu/Makefile )
+    fi
   echo "----------------------------------------------"
   echo " Kernel		- $CR_IMAGE_NAME"
   echo " Device		- $CR_VARIANT"
   echo " Compiler	- $CR_COMPILER_ARG"
-	if [[ "$CR_CLEAN" =~ ^[yY]$ ]]; then
-		echo " Env		- Clean Build"
-	else
-		echo " Env		- Dirty Build"
-	fi
-	if [ $CR_SELINUX = "1" ]; then
-		echo " SELinux	- Permissive"
-	else
-		echo " SELinux	- Enforcing"
-	fi
-  echo " KernelSU	- Version: $KSU_VERSION"
+    if [[ "$CR_CLEAN" =~ ^[yY]$ ]]; then
+        echo " Env		- Clean Build"
+    else
+        echo " Env		- Dirty Build"
+    fi
+    if [ $CR_SELINUX = "1" ]; then
+        echo " SELinux	- Permissive"
+    else
+        echo " SELinux	- Enforcing"
+    fi
+  if [[ "$CR_KSU" =~ ^[yY]$ ]]; then
+    echo " KernelSU	- Version: $KSU_VERSION"
+  elif [[ "$CR_KSU_NEXT" =~ ^[yY]$ ]]; then
+    echo " KernelSU-Next	- Version: $KSU_VERSION"
+  fi
+  if [[ "$CR_SUSFS" =~ ^[yY]$ ]]; then
+    echo " SuSFS		- Enabled"
+  fi
   echo "----------------------------------------------"
   echo "$CR_VARIANT kernel build finished."
   echo "Compiled DTB Size = $sizdT Kb"
@@ -533,12 +728,16 @@ echo " DEBUG : Debug build initiated "
 CR_TARGET=5
 CR_COMPILER=3
 CR_SELINUX=0
-CR_KSU="y"
+CR_KSU="n"
+CR_KSU_NEXT="y"
+CR_SUSFS="y"
 CR_CLEAN="n"
 echo " DEBUG : Set Build options "
 echo " DEBUG : Variant  : $CR_VARIANT_N960F"
 echo " DEBUG : Compiler : Clang 18"
 echo " DEBUG : Selinux  : $CR_SELINUX Enforcing"
+echo " DEBUG : KSU-Next : $CR_KSU_NEXT"
+echo " DEBUG : SuSFS    : $CR_SUSFS"
 echo " DEBUG : Clean    : $CR_CLEAN"
 echo "----------------------------------------------"
 BUILD
@@ -559,20 +758,33 @@ CR_BASE_KERNEL=$CR_OUTZIP/floyd/G960F-kernel
 CR_BASE_DTB=$CR_OUTZIP/floyd/G960F-dtb
 
 # Check packages
-if ! dpkg-query -W -f='${Status}' bsdiff  | grep "ok installed"; then 
+if ! dpkg-query -W -f='${Status}' bsdiff  | grep "ok installed" >/dev/null 2>&1; then 
 	echo "bsdiff is missing and is required for ZIP Packaging."
-	read -p "Do you want to install bsdiff? This requires sudo privileges. (y/n) > " INSTALL_BSDIFF
-	if [ "$INSTALL_BSDIFF" = "y" ]; then
-		echo "installing bsdiff."
-		sudo apt update
-		sudo apt install -y bsdiff
-		if ! dpkg-query -W -f='${Status}' bsdiff | grep "ok installed"; then
-			echo "Failed to install bsdiff. Please try installing it manually."
+	
+	# Auto-install for CI/Automated builds
+	if [ "$CI" = "true" ] || [ "$AUTOMATED_BUILD" = "true" ] || [ -n "$GITHUB_ACTIONS" ]; then
+		echo "Automated build detected. Installing bsdiff automatically..."
+		sudo apt update -qq
+		sudo apt install -y -qq bsdiff
+		if ! dpkg-query -W -f='${Status}' bsdiff | grep "ok installed" >/dev/null 2>&1; then
+			echo "Failed to install bsdiff automatically."
+			exit 1
+		fi
+		echo "bsdiff installed successfully."
+	else
+		read -p "Do you want to install bsdiff? This requires sudo privileges. (y/n) > " INSTALL_BSDIFF
+		if [ "$INSTALL_BSDIFF" = "y" ]; then
+			echo "installing bsdiff."
+			sudo apt update
+			sudo apt install -y bsdiff
+			if ! dpkg-query -W -f='${Status}' bsdiff | grep "ok installed" >/dev/null 2>&1; then
+				echo "Failed to install bsdiff. Please try installing it manually."
+				exit 0;
+			fi
+		else
+			echo "Please install bsdiff with sudo apt install bsdiff and try again."
 			exit 0;
 		fi
-	else
-		echo "Please install bsdiff with sudo apt install bsdiff and try again."
-		exit 0;
 	fi
 fi
 
@@ -639,10 +851,62 @@ if [ "$CR_TARGET" = "6" ]; then # Final kernel build
 fi
 }
 
+# Automated Build Function for CI/CD
+BUILD_AUTOMATED()
+{
+    # Use environment variables or default values
+    CR_TARGET=${CR_TARGET:-$DEFAULT_TARGET}
+    CR_COMPILER=${CR_COMPILER:-4}  # Default to Clang 20 for One UI 7
+    CR_SELINUX=${CR_SELINUX:-$DEFAULT_SELINUX}
+    CR_KSU=${CR_KSU:-$DEFAULT_KSU}
+    CR_KSU_NEXT=${CR_KSU_NEXT:-$DEFAULT_KSU_NEXT}
+    CR_SUSFS=${CR_SUSFS:-$DEFAULT_SUSFS}
+    CR_CLEAN=${CR_CLEAN:-$DEFAULT_CLEAN}
+    
+    echo "----------------------------------------------"
+    echo " AUTOMATED BUILD MODE (One UI 7 Optimized)"
+    echo " Target: $CR_TARGET"
+    echo " Compiler: Google Clang 20.0.0 (Option $CR_COMPILER)"
+    echo " SELinux: $CR_SELINUX"
+    echo " KSU: $CR_KSU"
+    echo " KSU-Next: $CR_KSU_NEXT"
+    echo " SuSFS: $CR_SUSFS"
+    echo " Clean: $CR_CLEAN"
+    echo "----------------------------------------------"
+    
+    # Set root choice based on individual flags
+    if [[ "$CR_KSU" =~ ^[yY]$ ]]; then
+        CR_ROOT_CHOICE=2
+    elif [[ "$CR_KSU_NEXT" =~ ^[yY]$ ]] && [[ "$CR_SUSFS" =~ ^[yY]$ ]]; then
+        CR_ROOT_CHOICE=4
+    elif [[ "$CR_KSU_NEXT" =~ ^[yY]$ ]]; then
+        CR_ROOT_CHOICE=3
+    else
+        CR_ROOT_CHOICE=1
+    fi
+    
+    # Execute build
+    if [ "$CR_TARGET" = "7" ]; then
+        CR_MKZIP="y"
+        BUILD_ALL
+    else
+        BUILD
+    fi
+}
+
+# Check if running in automated mode (CI environment)
+if [ "$CI" = "true" ] || [ "$AUTOMATED_BUILD" = "true" ] || [ -n "$GITHUB_ACTIONS" ]; then
+    echo "Running in automated mode..."
+    BUILD_AUTOMATED
+    exit 0
+fi
+
 # Main Menu
 clear
 echo "----------------------------------------------"
 echo "$CR_NAME $CR_VERSION Build Script $CR_DATE"
+echo "Optimized for One UI 7 with Google Clang 20.0.0"
+echo "Default: All Devices ZIP with KernelSU-Next + SuSFS"
 if [ "$1" = "-d" ]; then
 BUILD_DEBUG
 fi
@@ -651,28 +915,64 @@ echo " "
 echo "1) starlte" "   2) star2lte" "   3) crownlte"
 echo "4) starltekor" "5) star2ltekor" "6) crownltekor"
 echo  " "
-echo "7) Build All/ZIP"               "8) Abort"
+echo "7) Build All/ZIP (RECOMMENDED)"  "8) Abort"
 echo "----------------------------------------------"
-read -p "Please select your build target (1-8) > " CR_TARGET
+read -p "Please select your build target (1-8) [Default: 7 - All Devices] > " CR_TARGET
 echo "----------------------------------------------"
 echo " "
 echo "1) Google Clang 12 (LLVM +LTO)"
 echo "2) Google Clang 14 (LLVM +LTO)"
 echo "3) Google Clang 18 (LLVM +LTO PGO Bolt MLGO Polly)"
-echo "4) Google Clang 20 (LLVM +LTO PGO Bolt MLGO Polly)"
-echo "5) Neutron Clang 18 (^)"
-echo "6) Neutron Clang 19 (^)"
-echo "7) Neutron Clang 20 (BETA)"
+echo "4) Google Clang 20 (LLVM +LTO PGO Bolt MLGO Polly) [RECOMMENDED for One UI 7]"
+echo "5) Neutron Clang 18 (Advanced optimizations)"
+echo "6) Neutron Clang 19 (Advanced optimizations)"
+echo "7) Neutron Clang 20 (Latest, experimental)"
 echo "8) Other (Apollo/toolchain/clang-custom)"
 echo " "
-read -p "Please select your compiler (1-7) > " CR_COMPILER
+read -p "Please select your compiler (1-8) [Default: 4] > " CR_COMPILER
 echo " "
 echo "1) SELinux Permissive "  "2) SELinux Enforcing"
 echo " "
-read -p "Please select your SElinux mode (1-2) > " CR_SELINUX
+read -p "Please select your SElinux mode (1-2) [Default: 2 - Enforcing] > " CR_SELINUX
 echo " "
-read -p "Enable KernelSU? (y/n) > " CR_KSU
+echo "Root Solutions:"
+echo "1) None"
+echo "2) KernelSU (Classic)"
+echo "3) KernelSU-Next"
+echo "4) KernelSU-Next + SuSFS (RECOMMENDED for banking apps)"
 echo " "
+read -p "Please select root solution (1-4) [Default: 4 - KSU-Next+SuSFS] > " CR_ROOT_CHOICE
+echo " "
+
+# Set root options based on choice
+case $CR_ROOT_CHOICE in
+    1)
+        CR_KSU="n"
+        CR_KSU_NEXT="n"
+        CR_SUSFS="n"
+        ;;
+    2)
+        CR_KSU="y"
+        CR_KSU_NEXT="n"
+        CR_SUSFS="n"
+        ;;
+    3)
+        CR_KSU="n"
+        CR_KSU_NEXT="y"
+        CR_SUSFS="n"
+        ;;
+    4)
+        CR_KSU="n"
+        CR_KSU_NEXT="y"
+        CR_SUSFS="y"
+        ;;
+    *)
+        CR_KSU="n"
+        CR_KSU_NEXT="n"
+        CR_SUSFS="n"
+        ;;
+esac
+
 if [ "$CR_TARGET" = "8" ]; then
 echo "Build Aborted"
 exit
@@ -684,28 +984,39 @@ echo " "
 # Validate options
 if ! [[ "$CR_TARGET" =~ ^[1-8]$ ]]; then
     CR_TARGET=$DEFAULT_TARGET
-    echo " No target selected, defaulting to star2ltekor"
+    echo " No target selected, defaulting to Build All/ZIP (All Devices)"
 fi
 
-if ! [[ "$CR_COMPILER" =~ ^[1-7]$ ]]; then
+if ! [[ "$CR_COMPILER" =~ ^[1-8]$ ]]; then
     CR_COMPILER=$DEFAULT_COMPILER
+    echo " No compiler selected, defaulting to Google Clang 20.0.0 (One UI 7 optimized)"
 fi
 
 if ! [[ "$CR_SELINUX" =~ ^[1-2]$ ]]; then
     CR_SELINUX=$DEFAULT_SELINUX
+    echo " No SELinux mode selected, defaulting to Enforcing"
 fi
 
-if ! [[ "$CR_KSU" =~ ^[yYnN]$ ]]; then
+if ! [[ "$CR_ROOT_CHOICE" =~ ^[1-4]$ ]]; then
     CR_KSU=$DEFAULT_KSU
+    CR_KSU_NEXT=$DEFAULT_KSU_NEXT
+    CR_SUSFS=$DEFAULT_SUSFS
+    echo " No root solution selected, defaulting to KernelSU-Next + SuSFS"
 fi
+
 if ! [[ "$CR_CLEAN" =~ ^[yYnN]$ ]]; then
     CR_CLEAN=$DEFAULT_CLEAN
+    echo " No clean option selected, defaulting to dirty build"
 fi
 
 # Call functions
 if [ "$CR_TARGET" = "7" ]; then
 echo " "
-read -p "Build Flashable ZIP ? (y/n) > " CR_MKZIP
+read -p "Build Flashable ZIP ? (y/n) [Default: y] > " CR_MKZIP
+if ! [[ "$CR_MKZIP" =~ ^[yYnN]$ ]]; then
+    CR_MKZIP="y"
+    echo " Defaulting to flashable ZIP creation"
+fi
 echo " "
 BUILD_ALL
 else

@@ -1,0 +1,298 @@
+name: Build DS-ACK Kernel Matrix
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      build_all:
+        description: 'Build all variants'
+        required: false
+        default: 'true'
+        type: boolean
+      device_filter:
+        description: 'Device filter (empty = all)'
+        required: false
+        default: ''
+        type: string
+      include_zip:
+        description: 'Include ZIP packages (Build All target)'
+        required: false
+        default: 'true'
+        type: boolean
+
+env:
+  KERNEL_VERSION: "V1.11"
+  KERNEL_NAME: "DS-ACK"
+  MAINTAINER: "TheUnrealZaka"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    
+    strategy:
+      matrix:
+        include:
+          # All Devices ZIP (Target 7) - Only build these variants
+          - device: "all-devices"
+            target: "7"
+            variant: "ALL"
+            selinux: "1"
+            selinux_name: "Permissive"
+            root: "1"
+            root_name: "None"
+            build_type: "zip"
+          - device: "all-devices"
+            target: "7"
+            variant: "ALL"
+            selinux: "2"
+            selinux_name: "Enforcing"
+            root: "1"
+            root_name: "None"
+            build_type: "zip"
+          - device: "all-devices"
+            target: "7"
+            variant: "ALL"
+            selinux: "1"
+            selinux_name: "Permissive"
+            root: "2"
+            root_name: "KernelSU"
+            build_type: "zip"
+          - device: "all-devices"
+            target: "7"
+            variant: "ALL"
+            selinux: "2"
+            selinux_name: "Enforcing"
+            root: "2"
+            root_name: "KernelSU"
+            build_type: "zip"
+          - device: "all-devices"
+            target: "7"
+            variant: "ALL"
+            selinux: "1"
+            selinux_name: "Permissive"
+            root: "3"
+            root_name: "KernelSU-Next"
+            build_type: "zip"
+          - device: "all-devices"
+            target: "7"
+            variant: "ALL"
+            selinux: "2"
+            selinux_name: "Enforcing"
+            root: "3"
+            root_name: "KernelSU-Next"
+            build_type: "zip"
+          - device: "all-devices"
+            target: "7"
+            variant: "ALL"
+            selinux: "1"
+            selinux_name: "Permissive"
+            root: "4"
+            root_name: "KernelSU-Next-SuSFS"
+            build_type: "zip"
+          - device: "all-devices"
+            target: "7"
+            variant: "ALL"
+            selinux: "2"
+            selinux_name: "Enforcing"
+            root: "4"
+            root_name: "KernelSU-Next-SuSFS"
+            build_type: "zip"
+      fail-fast: false
+      max-parallel: 4
+
+    name: Build All Devices ${{ matrix.selinux_name }} ${{ matrix.root_name }} ZIP
+
+    steps:
+    - name: Set Build Date
+      run: echo "BUILD_DATE=$(date +'%d.%m.%Y')" >> $GITHUB_ENV
+
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup Build Environment
+      run: |
+        sudo apt update -qq
+        sudo apt install -y -qq \
+          git device-tree-compiler lz4 xz-utils zlib1g-dev \
+          openjdk-17-jdk gcc g++ python3 python-is-python3 \
+          default-jdk gnupg flex bison gperf build-essential \
+          zip curl libc6-dev libncurses-dev libx11-dev \
+          libreadline-dev libgl1 python3 make bc grep \
+          tofrodos python3-markdown libxml2-utils xsltproc \
+          repo cpio kmod openssl libelf-dev pahole \
+          libssl-dev libarchive-tools zstd bsdiff patch \
+          libtinfo6 --fix-missing
+
+    - name: Setup Toolchain
+      run: |
+        mkdir -p ../compiler
+        echo "Toolchain directory ready"
+
+    - name: Set Build Variables
+      run: |
+        # Set root solution flags based on choice
+        if [ "${{ matrix.root }}" = "2" ]; then
+          echo "CR_KSU=y" >> $GITHUB_ENV
+          echo "CR_KSU_NEXT=n" >> $GITHUB_ENV
+          echo "CR_SUSFS=n" >> $GITHUB_ENV
+        elif [ "${{ matrix.root }}" = "3" ]; then
+          echo "CR_KSU=n" >> $GITHUB_ENV
+          echo "CR_KSU_NEXT=y" >> $GITHUB_ENV
+          echo "CR_SUSFS=n" >> $GITHUB_ENV
+        elif [ "${{ matrix.root }}" = "4" ]; then
+          echo "CR_KSU=n" >> $GITHUB_ENV
+          echo "CR_KSU_NEXT=y" >> $GITHUB_ENV
+          echo "CR_SUSFS=y" >> $GITHUB_ENV
+        else
+          echo "CR_KSU=n" >> $GITHUB_ENV
+          echo "CR_KSU_NEXT=n" >> $GITHUB_ENV
+          echo "CR_SUSFS=n" >> $GITHUB_ENV
+        fi
+        
+        # Generate expected filename
+        if [ "${{ matrix.target }}" = "7" ]; then
+          # For Build All/ZIP
+          FILENAME="${{ env.KERNEL_NAME }}-${{ env.KERNEL_VERSION }}-${{ env.BUILD_DATE }}-${{ matrix.selinux_name }}"
+          if [ "${{ matrix.root }}" != "1" ]; then
+            FILENAME="${FILENAME}-${{ matrix.root_name }}"
+          fi
+          FILENAME="${FILENAME}.zip"
+        else
+          # For individual devices
+          FILENAME="${{ env.KERNEL_NAME }}-${{ env.KERNEL_VERSION }}-${{ matrix.variant }}-${{ env.BUILD_DATE }}-${{ matrix.selinux_name }}"
+          if [ "${{ matrix.root }}" != "1" ]; then
+            FILENAME="${FILENAME}-${{ matrix.root_name }}"
+          fi
+          FILENAME="${FILENAME}.img"
+        fi
+        echo "EXPECTED_FILENAME=${FILENAME}" >> $GITHUB_ENV
+
+    - name: Build Kernel
+      run: |
+        chmod +x apollo.sh
+        
+        # Set environment for automated build
+        export CI=true
+        export AUTOMATED_BUILD=true
+        
+        # For Build All (target 7), enable ZIP creation
+        if [ "${{ matrix.target }}" = "7" ]; then
+          export CR_MKZIP="y"
+        fi
+        
+        # Run build
+        ./apollo.sh
+      env:
+        CR_TARGET: ${{ matrix.target }}
+        CR_COMPILER: "4"  # Google Clang 20.0.0 for One UI 7
+        CR_SELINUX: ${{ matrix.selinux }}
+        CR_CLEAN: "n"
+
+    - name: Verify and Package Build
+      run: |
+        echo "Checking build output..."
+        ls -la Apollo/Product/ || true
+        
+        # Find the built image or zip
+        if [ "${{ matrix.target }}" = "7" ]; then
+          # Look for ZIP file
+          BUILT_FILE=$(find Apollo/Product -name "*.zip" -type f | head -1)
+          FILE_EXT="zip"
+        else
+          # Look for IMG file
+          BUILT_FILE=$(find Apollo/Product -name "*.img" -type f | head -1)
+          FILE_EXT="img"
+        fi
+        
+        if [ -n "$BUILT_FILE" ]; then
+          echo "Found: $BUILT_FILE"
+          SIZE=$(du -h "$BUILT_FILE" | cut -f1)
+          echo "Size: $SIZE"
+          
+          # Create final filename
+          FINAL_NAME="${{ env.EXPECTED_FILENAME }}"
+          mkdir -p release
+          cp "$BUILT_FILE" "release/${FINAL_NAME}"
+          echo "Copied to: release/${FINAL_NAME}"
+          
+          echo "RELEASE_FILE=release/${FINAL_NAME}" >> $GITHUB_ENV
+          echo "FILE_SIZE=$SIZE" >> $GITHUB_ENV
+        else
+          echo "❌ Build failed - no ${FILE_EXT} found"
+          exit 1
+        fi
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.EXPECTED_FILENAME }}
+        path: ${{ env.RELEASE_FILE }}
+        compression-level: 6
+        retention-days: 30
+
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Set Build Date
+      run: echo "BUILD_DATE=$(date +'%d.%m.%Y')" >> $GITHUB_ENV
+
+    - name: Download All Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Prepare Release
+      run: |
+        mkdir -p release
+        find artifacts -name "*.img" -exec cp {} release/ \;
+        find artifacts -name "*.zip" -exec cp {} release/ \;
+        ls -la release/
+        
+        echo "## 📦 Release Contents" > release_info.txt
+        echo "" >> release_info.txt
+        echo "**Total Images:** $(ls -1 release/*.img 2>/dev/null | wc -l)" >> release_info.txt
+        echo "**Total ZIP Packages:** $(ls -1 release/*.zip 2>/dev/null | wc -l)" >> release_info.txt
+        echo "" >> release_info.txt
+        echo "**Individual Device Images (.img):**" >> release_info.txt
+        for file in release/*.img; do
+          if [ -f "$file" ]; then
+            filename=$(basename "$file")
+            size=$(du -h "$file" | cut -f1)
+            echo "- \`$filename\` ($size)" >> release_info.txt
+          fi
+        done
+        echo "" >> release_info.txt
+        echo "**All-in-One ZIP Packages (.zip):**" >> release_info.txt
+        for file in release/*.zip; do
+          if [ -f "$file" ]; then
+            filename=$(basename "$file")
+            size=$(du -h "$file" | cut -f1)
+            echo "- \`$filename\` ($size)" >> release_info.txt
+          fi
+        done
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: "${{ env.KERNEL_NAME }}-${{ env.KERNEL_VERSION }} Kernels"
+        tag_name: "${{ env.KERNEL_VERSION }}"
+        files: release/*
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

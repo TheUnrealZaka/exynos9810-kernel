@@ -1,0 +1,338 @@
+name: Build DS-ACK Kernel for One UI 7
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  KERNEL_VERSION: "V1.11"
+  KERNEL_NAME: "DS-ACK"
+  MAINTAINER: "TheUnrealZaka"
+  ANDROID_VERSION: "q"
+  PLATFORM_VERSION: "13.0.0"
+
+jobs:
+  build-matrix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    
+    strategy:
+      matrix:
+        # Only build All Devices ZIP packages
+        selinux: [
+          { mode: "1", name: "Permissive" },
+          { mode: "2", name: "Enforcing" }
+        ]
+        root_solution: [
+          { choice: "1", name: "None", ksu: "n", ksu_next: "n", susfs: "n" },
+          { choice: "2", name: "KernelSU", ksu: "y", ksu_next: "n", susfs: "n" },
+          { choice: "3", name: "KernelSU-Next", ksu: "n", ksu_next: "y", susfs: "n" },
+          { choice: "4", name: "KernelSU-Next-SuSFS", ksu: "n", ksu_next: "y", susfs: "y" }
+        ]
+        oneui: [
+          { version: "oneui7", name: "OneUI7" }
+        ]
+      fail-fast: false
+      max-parallel: 2
+
+    name: Build All Devices ${{ matrix.selinux.name }} ${{ matrix.root_solution.name }} ${{ matrix.oneui.name }} ZIP
+
+    steps:
+    - name: Set Build Time
+      run: |
+        echo "BUILD_TIME=$(date +'%d.%m.%Y')" >> $GITHUB_ENV
+        echo "BUILD_TIMESTAMP=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up build environment
+      run: |
+        sudo apt update && sudo apt install -y \
+        git device-tree-compiler lz4 xz-utils zlib1g-dev openjdk-17-jdk gcc g++ python3 python-is-python3 p7zip-full \
+        android-sdk-libsparse-utils erofs-utils default-jdk git gnupg flex bison gperf build-essential zip curl \
+        libc6-dev libncurses-dev libx11-dev libreadline-dev libgl1 libgl1-mesa-dev python3 make sudo gcc g++ bc \
+        grep tofrodos python3-markdown libxml2-utils xsltproc zlib1g-dev python-is-python3 libc6-dev libtinfo6 \
+        make repo cpio kmod openssl libelf-dev pahole libssl-dev libarchive-tools zstd bsdiff patch \
+        --fix-missing
+        
+        # Install libtinfo5 for older toolchains
+        wget -q http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
+        sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb || true
+
+    - name: Setup ccache
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        key: kernel-build-all-devices-${{ matrix.selinux.name }}-${{ matrix.root_solution.name }}-${{ matrix.oneui.version }}
+        max-size: 2G
+
+    - name: Setup Toolchain Directory
+      run: |
+        mkdir -p ../compiler
+        echo "Toolchain directory created"
+
+    - name: Generate Build Configuration
+      run: |
+        # Generate build name for All Devices ZIP
+        BUILD_NAME="${{ env.KERNEL_NAME }}-${{ env.KERNEL_VERSION }}-${{ env.BUILD_TIME }}"
+        
+        # Add SELinux mode
+        BUILD_NAME="${BUILD_NAME}-${{ matrix.selinux.name }}"
+        
+        # Add root solution
+        if [ "${{ matrix.root_solution.choice }}" != "1" ]; then
+          BUILD_NAME="${BUILD_NAME}-${{ matrix.root_solution.name }}"
+        fi
+        
+        # Add OneUI7 suffix
+        BUILD_NAME="${BUILD_NAME}-${{ matrix.oneui.name }}"
+        
+        echo "BUILD_NAME=${BUILD_NAME}" >> $GITHUB_ENV
+        echo "Expected output: Apollo/Product/${BUILD_NAME}.zip"
+
+    - name: Build Kernel for All Devices ZIP
+      run: |
+        # Make apollo.sh executable
+        chmod +x apollo.sh
+        
+        # Set environment variables for automated build
+        export CI=true
+        export AUTOMATED_BUILD=true
+        export CR_MKZIP="y"  # Always enable ZIP creation for All Devices
+        
+        # Run automated build with matrix parameters
+        ./apollo.sh
+      env:
+        CR_TARGET: "7"  # All Devices target
+        CR_COMPILER: "4"  # Google Clang 20.0.0 for One UI 7
+        CR_SELINUX: ${{ matrix.selinux.mode }}
+        CR_KSU: ${{ matrix.root_solution.ksu }}
+        CR_KSU_NEXT: ${{ matrix.root_solution.ksu_next }}
+        CR_SUSFS: ${{ matrix.root_solution.susfs }}
+        CR_CLEAN: "n"
+
+    - name: Verify Build Output
+      run: |
+        echo "Checking for build output..."
+        ls -la Apollo/Product/ || echo "Product directory not found"
+        ls -la Apollo/Out/ || echo "Out directory not found"
+        
+        # Look for ZIP file for All Devices build
+        BUILT_FILE=$(find Apollo/Product -name "*.zip" -type f | head -1)
+        FILE_TYPE="ZIP"
+        
+        if [ -n "$BUILT_FILE" ]; then
+          echo "Found built $FILE_TYPE: $BUILT_FILE"
+          echo "BUILT_FILE_PATH=$BUILT_FILE" >> $GITHUB_ENV
+          
+          # Get file size
+          SIZE=$(du -h "$BUILT_FILE" | cut -f1)
+          echo "$FILE_TYPE size: $SIZE"
+          echo "FILE_SIZE=$SIZE" >> $GITHUB_ENV
+        else
+          echo "No build output found!"
+          exit 1
+        fi
+
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.BUILD_NAME }}
+        path: ${{ env.BUILT_FILE_PATH }}
+        compression-level: 6
+        retention-days: 30
+
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    needs: build-matrix
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+    - name: Set Build Time
+      run: |
+        echo "BUILD_TIME=$(date +'%d.%m.%Y')" >> $GITHUB_ENV
+        echo "BUILD_TIMESTAMP=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
+    - name: Download All Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: release-artifacts
+
+    - name: Organize Release Files
+      run: |
+        mkdir -p release
+        find release-artifacts -name "*.img" -exec cp {} release/ \;
+        find release-artifacts -name "*.zip" -exec cp {} release/ \;
+        ls -la release/
+        echo "Total files: $(ls -1 release/ | wc -l)"
+
+    - name: Generate Release Notes
+      run: |
+        cat > release_notes.md << 'EOF'
+        ## ${{ env.KERNEL_NAME }} ${{ env.KERNEL_VERSION }} for Samsung Galaxy S9/S9+/Note 9 (One UI 7 Compatible)
+        
+        A high-performance custom kernel for Exynos 9810 devices with advanced features and optimizations!
+        
+        ### 🚀 What's New in ${{ env.KERNEL_VERSION }}
+        - **One UI 7 Compatibility** - Full support for One UI 7 ports and NobleROM
+        - **KernelSU-Next Integration** - Latest KernelSU-Next for modern root management
+        - **SuSFS Support** - Advanced root concealment and security features
+        - **Multiple Build Variants** - Choose your perfect configuration
+        - **ZIP Packages** - Flashable ZIP packages for all devices
+        
+        ### 📱 Device Support
+        - **Galaxy S9 (SM-G960F/N)** - starlte/starltekor
+        - **Galaxy S9+ (SM-G965F/N)** - star2lte/star2ltekor  
+        - **Galaxy Note 9 (SM-N960F/N)** - crownlte/crownltekor
+        
+        ### 🔧 Available Configurations
+        
+        #### Individual Device Images (.img)
+        Flash using ODIN or custom recovery
+        
+        #### All-in-One ZIP Packages (.zip)  
+        Flash using custom recovery (TWRP/OrangeFox)
+        - Automatically detects your device
+        - Supports all variants in one package
+        
+        #### SELinux Modes
+        - **Permissive** - Maximum compatibility, some security trade-offs
+        - **Enforcing** - Enhanced security, may have compatibility issues with some apps
+        
+        #### Root Solutions
+        - **None** - Stock kernel without root capabilities
+        - **KernelSU** - Classic KernelSU implementation
+        - **KernelSU-Next** - Next-generation KernelSU with improvements
+        - **KernelSU-Next + SuSFS** - Advanced root concealment (RECOMMENDED)
+        
+        #### ROM Compatibility
+        - **Standard** - Works with most custom ROMs
+        - **OneUI7** - Optimized for One UI 7 ports (fixes brightness issues)
+        
+        ### 🎯 What is SuSFS?
+        SuSFS (Simulation UniverseSystem FileSystem) is an advanced rootkit that provides:
+        - **Root Detection Bypass** - Hide root from banking and security apps
+        - **Custom ROM Concealment** - Appear as stock firmware
+        - **Debug Ramdisk Hiding** - Advanced system modification concealment
+        - **LSPosed Support** - Hide Xposed framework usage
+        - **Kernel Name Spoofing** - Appear as official Samsung kernel
+        
+        ### 📥 Installation Instructions
+        
+        #### For ZIP Files (Recommended):
+        1. **Boot into Recovery** (TWRP/OrangeFox recommended)
+        2. **Backup Current Boot** (Optional but recommended)
+        3. **Wipe Dalvik/Cache** (Recommended)
+        4. **Flash ZIP Package** - Auto-detects device and applies correct kernel
+        5. **Reboot System**
+        6. **Enjoy** - Your device is now running the latest DS-ACK kernel!
+        
+        ### 🔍 How to Choose Your Build
+        
+        **ZIP Filename Format:** `DS-ACK-V1.11-[DATE]-[SELINUX]-[ROOT]-[ONEUI7].zip`
+        
+        **For One UI 7 users:**
+        - Use builds with **OneUI7** suffix
+        - Recommended: `*-Enforcing-KernelSU-Next-SuSFS-OneUI7.zip`
+        
+        **For other Custom ROMs:**
+        - Use standard builds (without OneUI7 suffix)
+        - Recommended: `*-Permissive-KernelSU-Next-SuSFS.zip`
+        
+        **For Banking App Users:**
+        - **MUST USE** SuSFS builds for best detection bypass
+        - Consider Enforcing mode for additional security
+        
+        ### 🛠️ Build Information
+        - **Kernel Version:** Linux 4.9.337
+        - **Compiler:** Google Clang 20.0.0 (R547379)
+        - **Android Version:** Android 10 (API 29)
+        - **Build Date:** ${{ env.BUILD_TIMESTAMP }}
+        - **Built by:** ${{ env.MAINTAINER }}
+        
+        ### 🏆 Credits & Thanks
+        - **[@duhansysl](https://github.com/duhansysl)** - Main DS-ACK Kernel developer and maintainer
+        - **[@AnanJaser1211](https://github.com/AnanJaser1211)** - Original Apollo Kernel developer
+        - **[@rifsxd](https://github.com/rifsxd)** - KernelSU-Next development
+        - **[@simonpunk](https://gitlab.com/simonpunk)** - SuSFS development
+        - **Samsung** - Base kernel source
+        - **Community** - Testing and feedback
+        
+        ### 📞 Support & Community
+        - **Telegram Group:** [@duhanrom_members](https://t.me/duhanrom_members)
+        - **Issues:** Report bugs in our GitHub Issues
+        - **Updates:** Follow for latest releases
+        
+        ### ⚡ Performance Features
+        - Advanced CPU governors
+        - Custom GPU frequencies  
+        - Memory optimizations
+        - Power efficiency improvements
+        - Thermal management
+        
+        ### 🔒 Security Features (SuSFS Builds)
+        - Root detection bypass for banking apps
+        - SafetyNet/Play Integrity bypass assistance
+        - Custom ROM concealment
+        - Advanced hiding mechanisms
+        
+        ---
+        
+        **Note:** SuSFS is experimental technology. While stable, use at your own discretion.
+        Always make a full backup before flashing any custom kernel.
+        EOF
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: "${{ env.KERNEL_NAME }}-${{ env.KERNEL_VERSION }} Kernels"
+        tag_name: "${{ env.KERNEL_VERSION }}"
+        files: release/*
+        body_path: release_notes.md
+        draft: false
+        prerelease: false
+        make_latest: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload All Builds Archive
+      uses: actions/upload-artifact@v4
+      with:
+        path: release/*
+        compression-level: 9
+        retention-days: 90
+
+  build-summary:
+    if: always()
+    needs: build-matrix
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Build Summary
+      run: |
+        echo "## 📊 Build Matrix Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Build Type | SELinux | Root Solution | OneUI | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|------------|---------|---------------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+        
+        # Individual device builds
+        echo "| Individual Device Images | Permissive/Enforcing | None/KSU/KSU-Next/KSU-Next+SuSFS | Standard/OneUI7 | ✅ |" >> $GITHUB_STEP_SUMMARY
+        echo "| All-in-One ZIP Packages | Permissive/Enforcing | None/KSU/KSU-Next/KSU-Next+SuSFS | OneUI7 | ✅ |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Device Support:**" >> $GITHUB_STEP_SUMMARY
+        echo "- Galaxy S9 INTL/KOR (G960F/N)" >> $GITHUB_STEP_SUMMARY
+        echo "- Galaxy S9+ INTL/KOR (G965F/N)" >> $GITHUB_STEP_SUMMARY
+        echo "- Galaxy Note9 INTL/KOR (N960F/N)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Total ZIP Packages:** 8 (2 SELinux × 4 root solutions × 1 OneUI7 variant)" >> $GITHUB_STEP_SUMMARY

@@ -71,6 +71,7 @@ lib/lib.a.symversions
 !.gitignore
 !.mailmap
 !.cocciconfig
+!.github
 
 #
 # Generated include files
