@@ -229,6 +229,8 @@ jobs:
           echo "FILE_SIZE=$SIZE" >> $GITHUB_ENV
         else
           echo "❌ Build failed - no ${FILE_EXT} found"
+          echo "Available files in Apollo:"
+          find Apollo -type f -name "*" || true
           exit 1
         fi
 
@@ -267,15 +269,6 @@ jobs:
         echo "" >> release_info.txt
         echo "**Total Images:** $(ls -1 release/*.img 2>/dev/null | wc -l)" >> release_info.txt
         echo "**Total ZIP Packages:** $(ls -1 release/*.zip 2>/dev/null | wc -l)" >> release_info.txt
-        echo "" >> release_info.txt
-        echo "**Individual Device Images (.img):**" >> release_info.txt
-        for file in release/*.img; do
-          if [ -f "$file" ]; then
-            filename=$(basename "$file")
-            size=$(du -h "$file" | cut -f1)
-            echo "- \`$filename\` ($size)" >> release_info.txt
-          fi
-        done
         echo "" >> release_info.txt
         echo "**All-in-One ZIP Packages (.zip):**" >> release_info.txt
         for file in release/*.zip; do
