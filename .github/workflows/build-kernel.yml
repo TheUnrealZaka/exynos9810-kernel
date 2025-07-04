@@ -53,7 +53,7 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
-
+        
     - name: Set up build environment
       run: |
         sudo apt update && sudo apt install -y \
@@ -98,6 +98,26 @@ jobs:
         echo "BUILD_NAME=${BUILD_NAME}" >> $GITHUB_ENV
         echo "Expected output: Apollo/Product/${BUILD_NAME}.zip"
 
+    - name: Pre-build Setup and Validation
+      run: |
+        echo "=== Pre-build Validation ==="
+        echo "Root solution: ${{ matrix.root_solution.name }}"
+        echo "KSU: ${{ matrix.root_solution.ksu }}"
+        echo "KSU_NEXT: ${{ matrix.root_solution.ksu_next }}"
+        echo "SUSFS: ${{ matrix.root_solution.susfs }}"
+        
+        # Check if we need to set up KernelSU symlink for legacy builds
+        if [ "${{ matrix.root_solution.ksu }}" = "y" ]; then
+          echo "Setting up KernelSU classic..."
+          # We'll let the build script handle the actual setup
+        fi
+        
+        # Check for required files
+        if [ ! -f "apollo.sh" ]; then
+          echo "ERROR: apollo.sh not found!"
+          exit 1
+        fi
+
     - name: Build Kernel for All Devices ZIP
       run: |
         # Make apollo.sh executable
@@ -139,6 +159,8 @@ jobs:
           echo "FILE_SIZE=$SIZE" >> $GITHUB_ENV
         else
           echo "No build output found!"
+          echo "Checking for any files in Apollo directory:"
+          find Apollo -type f -name "*" || true
           exit 1
         fi
 
@@ -198,9 +220,6 @@ jobs:
         
         ### 🔧 Available Configurations
         
-        #### Individual Device Images (.img)
-        Flash using ODIN or custom recovery
-        
         #### All-in-One ZIP Packages (.zip)  
         Flash using custom recovery (TWRP/OrangeFox)
         - Automatically detects your device
@@ -217,7 +236,6 @@ jobs:
         - **KernelSU-Next + SuSFS** - Advanced root concealment (RECOMMENDED)
         
         #### ROM Compatibility
-        - **Standard** - Works with most custom ROMs
         - **OneUI7** - Optimized for One UI 7 ports (fixes brightness issues)
         
         ### 🎯 What is SuSFS?
@@ -245,10 +263,6 @@ jobs:
         **For One UI 7 users:**
         - Use builds with **OneUI7** suffix
         - Recommended: `*-Enforcing-KernelSU-Next-SuSFS-OneUI7.zip`
-        
-        **For other Custom ROMs:**
-        - Use standard builds (without OneUI7 suffix)
-        - Recommended: `*-Permissive-KernelSU-Next-SuSFS.zip`
         
         **For Banking App Users:**
         - **MUST USE** SuSFS builds for best detection bypass
@@ -309,6 +323,7 @@ jobs:
     - name: Upload All Builds Archive
       uses: actions/upload-artifact@v4
       with:
+        name: "all-builds-${{ env.KERNEL_VERSION }}"
         path: release/*
         compression-level: 9
         retention-days: 90
@@ -325,9 +340,6 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "| Build Type | SELinux | Root Solution | OneUI | Status |" >> $GITHUB_STEP_SUMMARY
         echo "|------------|---------|---------------|-------|--------|" >> $GITHUB_STEP_SUMMARY
-        
-        # Individual device builds
-        echo "| Individual Device Images | Permissive/Enforcing | None/KSU/KSU-Next/KSU-Next+SuSFS | Standard/OneUI7 | ✅ |" >> $GITHUB_STEP_SUMMARY
         echo "| All-in-One ZIP Packages | Permissive/Enforcing | None/KSU/KSU-Next/KSU-Next+SuSFS | OneUI7 | ✅ |" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**Device Support:**" >> $GITHUB_STEP_SUMMARY
