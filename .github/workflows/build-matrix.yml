@@ -177,6 +177,16 @@ jobs:
         fi
         echo "EXPECTED_FILENAME=${FILENAME}" >> $GITHUB_ENV
 
+    - name: Pre-build Validation
+      run: |
+        echo "=== Pre-build Validation ==="
+        echo "Root solution: ${{ matrix.root_name }}"
+        echo "KSU: ${{ env.CR_KSU }}"
+        echo "KSU_NEXT: ${{ env.CR_KSU_NEXT }}"
+        echo "SUSFS: ${{ env.CR_SUSFS }}"
+        echo "SELinux: ${{ matrix.selinux }} (${{ matrix.selinux_name }})"
+        echo "Expected filename: ${{ env.EXPECTED_FILENAME }}"
+
     - name: Build Kernel
       run: |
         chmod +x apollo.sh
@@ -196,6 +206,9 @@ jobs:
         CR_TARGET: ${{ matrix.target }}
         CR_COMPILER: "4"  # Google Clang 20.0.0 for One UI 7
         CR_SELINUX: ${{ matrix.selinux }}
+        CR_KSU: ${{ env.CR_KSU }}
+        CR_KSU_NEXT: ${{ env.CR_KSU_NEXT }}
+        CR_SUSFS: ${{ env.CR_SUSFS }}
         CR_CLEAN: "n"
 
     - name: Verify and Package Build

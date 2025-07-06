@@ -178,6 +178,9 @@ CLEAN_KSU_SUSFS()
     if [ -L "drivers/kernelsu" ]; then
         rm -f drivers/kernelsu
     fi
+    if [ -d "drivers/kernelsu" ]; then
+        rm -rf drivers/kernelsu
+    fi
     if [ -d "KernelSU" ]; then
         rm -rf KernelSU
     fi
@@ -473,6 +476,10 @@ BUILD_GENERATE_CONFIG()
     CR_IMAGE_NAME=$CR_IMAGE_NAME-KSU-Next
     zver=$zver-KernelSU-Next
   else
+    echo " Building without root (creating dummy KernelSU Kconfig)"
+    # Create a dummy KernelSU Kconfig file to prevent build errors
+    mkdir -p drivers/kernelsu
+    echo "# Dummy KernelSU Kconfig - no KernelSU support" > drivers/kernelsu/Kconfig
     echo "# CONFIG_KSU is not set" >> $CR_DEFCONFIG/tmp_defconfig
   fi
   

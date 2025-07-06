@@ -1,4 +1,12 @@
+[submodule "KernelSU"]
+	path = KernelSU
+	url = https://github.com/tiann/KernelSU
+	branch = main
 [submodule "KernelSU-Next"]
 	path = KernelSU-Next
 	url = https://github.com/KernelSU-Next/KernelSU-Next/
 	branch = next
+[submodule "susfs4ksu"]
+	path = susfs4ksu
+	url = https://gitlab.com/simonpunk/susfs4ksu/
+	branch = kernel-4.9
