@@ -605,6 +605,10 @@ static int ptrace_detach(struct task_struct *child, unsigned int data)
 	 * the comment in ptrace_resume().
 	 */
 	child->exit_code = data;
+
+	/* Reset ptrace_message to avoid stale PID leaks */
+	child->ptrace_message = 0;
+
 	__ptrace_detach(current, child);
 	write_unlock_irq(&tasklist_lock);
 
@@ -886,7 +890,8 @@ static int ptrace_resume(struct task_struct *child, long request,
 	wake_up_state(child, __TASK_TRACED);
 	if (need_siglock)
 		spin_unlock_irq(&child->sighand->siglock);
-
+	/* Clear ptrace_message to avoid leaking stale event data (e.g., zygote PID) */
+	child->ptrace_message = 0;
 	return 0;
 }
 

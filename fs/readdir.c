@@ -18,6 +18,9 @@
 #include <linux/security.h>
 #include <linux/syscalls.h>
 #include <linux/unistd.h>
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+#include <linux/susfs_def.h>
+#endif
 
 #include <asm/uaccess.h>
 
@@ -206,6 +209,11 @@ static int filldir(struct dir_context *ctx, const char *name, int namlen,
 	int reclen = ALIGN(offsetof(struct linux_dirent, d_name) + namlen + 2,
 		sizeof(long));
 
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	if (likely(current->susfs_task_state )) {
+		return 0;
+	}
+#endif
 	buf->error = verify_dirent_name(name, namlen);
 	if (unlikely(buf->error))
 		return buf->error;
@@ -295,6 +303,11 @@ static int filldir64(struct dir_context *ctx, const char *name, int namlen,
 	int reclen = ALIGN(offsetof(struct linux_dirent64, d_name) + namlen + 1,
 		sizeof(u64));
 
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	if (likely(current->susfs_task_state )) {
+		return 0;
+	}
+#endif
 	buf->error = verify_dirent_name(name, namlen);
 	if (unlikely(buf->error))
 		return buf->error;
