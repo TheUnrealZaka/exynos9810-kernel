@@ -1,9 +1,0 @@
-
-
-#ifndef _DT_BINDINGS_POWER_EXYNOS_POWER_H
-#define _DT_BINDINGS_POWER_EXYNOS_POWER_H
-
-#define PD_OK_AUD		0x1
-#define PD_OK_VTS		0x2
-
-#endif

@@ -1,9 +1,0 @@
-
-
-#ifndef __DT_BINDINGS_DMA_SUN4I_A10_H_
-#define __DT_BINDINGS_DMA_SUN4I_A10_H_
-
-#define SUN4I_DMA_NORMAL	0
-#define SUN4I_DMA_DEDICATED	1
-
-#endif 

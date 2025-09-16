@@ -18,6 +18,14 @@
 *.so
 *.so.dbg
 *.mod.c
+
+# Build artifacts specific to this project
+*.rej
+kernel/kheaders_data.tar.xz.tmp/
+test_*.sh
+KernelSU-Next/
+susfs4ksu/
+fs/susfs/
 *.i
 *.lst
 *.symtypes
