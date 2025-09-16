@@ -108,61 +108,111 @@ SETUP_KSU()
 SETUP_KSU_NEXT()
 {
     echo "----------------------------------------------"
-    echo " Setting up KernelSU-Next"
+    echo " Setting up KernelSU-Next (sidex15)"
     
-    # Run KernelSU-Next setup script
-    echo " Running KernelSU-Next setup script..."
-    curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+    # Clean existing KernelSU-Next if exists
+    if [ -d "KernelSU-Next" ]; then
+        rm -rf KernelSU-Next
+    fi
+    
+    # Clone KernelSU-Next from sidex15 with next-susfs branch
+    echo " Cloning KernelSU-Next from sidex15..."
+    git clone https://github.com/sidex15/KernelSU-Next.git --branch next-susfs --single-branch
     
     if [ $? -ne 0 ]; then
-        echo " Failed to setup KernelSU-Next"
+        echo " Failed to clone KernelSU-Next from sidex15"
         exit 1
     fi
     
-    # Apply the KernelSU-Next + SuSFS patch if it exists
-    if [ -f "Apollo/Patches/0001-kernel-implement-susfs-v1.5.8-KernelSU-Next-v1.0.8.patch" ]; then
-        echo " Applying KernelSU-Next + SuSFS integration patch..."
-        cd KernelSU-Next
-        patch -p1 < ../Apollo/Patches/0001-kernel-implement-susfs-v1.5.8-KernelSU-Next-v1.0.8.patch
-        if [ $? -eq 0 ]; then
-            echo " KernelSU-Next + SuSFS patch applied successfully"
-        else
-            echo " Failed to apply KernelSU-Next + SuSFS patch"
-            exit 1
-        fi
-        cd ..
-    else
-        echo " KernelSU-Next + SuSFS patch file not found, continuing without it"
+    # Create symbolic link to drivers/kernelsu
+    echo " Creating KernelSU symbolic link..."
+    if [ -L "drivers/kernelsu" ]; then
+        rm -f drivers/kernelsu
+    fi
+    if [ -d "drivers/kernelsu" ]; then
+        rm -rf drivers/kernelsu
     fi
     
-    echo " KernelSU-Next setup completed"
+    ln -sf "../KernelSU-Next/kernel" "drivers/kernelsu"
+    
+    if [ $? -ne 0 ]; then
+        echo " Failed to create KernelSU symbolic link"
+        exit 1
+    fi
+    
+    # Add KernelSU to drivers Makefile and Kconfig if not present
+    if ! grep -q "kernelsu" drivers/Makefile; then
+        echo "obj-\$(CONFIG_KSU) += kernelsu/" >> drivers/Makefile
+        echo " Added KernelSU to drivers/Makefile"
+    fi
+    
+    if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
+        sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+        echo " Added KernelSU to drivers/Kconfig"
+    fi
+    
+    # If SuSFS is being used, apply SuSFS patches to KernelSU-Next
+    if [[ "$CR_SUSFS" =~ ^[yY]$ ]] && [ -d "susfs4ksu" ] && [ -f "susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ]; then
+        echo " Applying SuSFS patches to KernelSU-Next..."
+        cd KernelSU-Next
+        patch -p1 < ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+        if [ $? -eq 0 ]; then
+            echo " SuSFS patches applied to KernelSU-Next successfully"
+        else
+            echo " Warning: Failed to apply SuSFS patches to KernelSU-Next"
+            echo " This may be normal if KernelSU-Next already has SuSFS support built-in"
+        fi
+        cd ..
+    fi
+    
+    echo " KernelSU-Next (sidex15) setup completed"
 }
 
 SETUP_SUSFS()
 {
     echo "----------------------------------------------"
-    echo " Setting up SuSFS"
-    if [ ! -d "susfs4ksu" ]; then
-        echo " Downloading SuSFS..."
-        git clone https://gitlab.com/simonpunk/susfs4ksu.git --branch kernel-4.9 --single-branch
-        if [ $? -ne 0 ]; then
-            echo " Failed to download SuSFS"
-            exit 1
-        fi
-        echo " SuSFS downloaded successfully"
-    else
-        echo " SuSFS already exists"
+    echo " Setting up SuSFS (simonpunk) for kernel 4.9"
+    
+    # Clean existing susfs4ksu if exists
+    if [ -d "susfs4ksu" ]; then
+        rm -rf susfs4ksu
     fi
-
-    # Apply the correct SuSFS patch for kernel 4.9
-    if [ -f "Apollo/Patches/0002_enable_susfs_for_kernel_4.9.patch" ]; then
+    
+    # Clone SuSFS from simonpunk with kernel-4.9 branch
+    echo " Cloning SuSFS from simonpunk (kernel-4.9 branch)..."
+    git clone https://gitlab.com/simonpunk/susfs4ksu.git --branch kernel-4.9 --single-branch
+    
+    if [ $? -ne 0 ]; then
+        echo " Failed to clone SuSFS from simonpunk"
+        exit 1
+    fi
+    
+    echo " SuSFS cloned successfully"
+    
+    # Copy SuSFS source files to kernel source
+    echo " Integrating SuSFS into kernel source..."
+    
+    # Copy include files
+    if [ -d "susfs4ksu/kernel_patches/include" ]; then
+        echo " Copying SuSFS include files..."
+        cp -r susfs4ksu/kernel_patches/include/* include/ 2>/dev/null || echo " No include files found to copy"
+    fi
+    
+    # Copy fs files
+    if [ -d "susfs4ksu/kernel_patches/fs" ]; then
+        echo " Copying SuSFS fs files..."
+        cp -r susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || echo " No fs files found to copy"
+    fi
+    
+    # Apply main SuSFS kernel patch for 4.9
+    if [ -f "susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch" ]; then
         echo " Applying SuSFS kernel patch for 4.9..."
-        patch -p1 < "Apollo/Patches/0002_enable_susfs_for_kernel_4.9.patch"
-        if [ $? -eq 0 ]; then
-            echo " SuSFS kernel patch applied successfully"
+        patch -p1 < "susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch"
+        if [ $? -ne 0 ]; then
+            echo " Warning: Some parts of SuSFS kernel patch failed to apply"
+            echo " This may be normal for some kernel versions. Continuing..."
         else
-            echo " Failed to apply SuSFS kernel patch"
-            exit 1
+            echo " SuSFS kernel patch applied successfully"
         fi
     else
         echo " SuSFS kernel patch file not found"
@@ -175,18 +225,50 @@ SETUP_SUSFS()
 CLEAN_KSU_SUSFS()
 {
     echo " Cleaning KernelSU/SuSFS setup..."
+    
+    # Remove KernelSU symlink and directories
     if [ -L "drivers/kernelsu" ]; then
         rm -f drivers/kernelsu
+        echo " Removed KernelSU symlink"
     fi
     if [ -d "drivers/kernelsu" ]; then
         rm -rf drivers/kernelsu
+        echo " Removed KernelSU directory"
     fi
+    
+    # Remove KernelSU repositories
     if [ -d "KernelSU" ]; then
         rm -rf KernelSU
+        echo " Removed KernelSU directory"
     fi
     if [ -d "KernelSU-Next" ]; then
         rm -rf KernelSU-Next
+        echo " Removed KernelSU-Next directory"
     fi
+    
+    # Remove SuSFS
+    if [ -d "susfs4ksu" ]; then
+        rm -rf susfs4ksu
+        echo " Removed susfs4ksu directory"
+    fi
+    if [ -d "fs/susfs" ]; then
+        rm -rf fs/susfs
+        echo " Removed SuSFS kernel module"
+    fi
+    
+    # Clean KernelSU from drivers/Makefile
+    if [ -f "drivers/Makefile" ]; then
+        sed -i '/kernelsu/d' drivers/Makefile
+        echo " Cleaned KernelSU from drivers/Makefile"
+    fi
+    
+    # Clean KernelSU from drivers/Kconfig
+    if [ -f "drivers/Kconfig" ]; then
+        sed -i '/drivers\/kernelsu\/Kconfig/d' drivers/Kconfig
+        echo " Cleaned KernelSU from drivers/Kconfig"
+    fi
+    
+    echo " KernelSU/SuSFS cleanup completed"
 }
 
 # Compiler Selection

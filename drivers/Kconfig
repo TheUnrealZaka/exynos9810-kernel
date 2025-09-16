@@ -246,8 +246,8 @@ source "drivers/security/samsung/icdrv/Kconfig"
 
 source "drivers/security/samsung/tzic/Kconfig"
 
-source "drivers/kernelsu/Kconfig"
 
 source "drivers/extremerom/Kconfig"
 
+source "drivers/kernelsu/Kconfig"
 endmenu
