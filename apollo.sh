@@ -171,7 +171,7 @@ SETUP_KSU_NEXT()
 SETUP_SUSFS()
 {
     echo "----------------------------------------------"
-    echo " Setting up SuSFS (simonpunk) v1.5.9 from gki-android15-6.6"
+    echo " Setting up SuSFS (simonpunk) v1.5.9 with manual kernel patches"
     
     # Clean existing susfs4ksu if exists
     if [ -d "susfs4ksu" ]; then
@@ -192,51 +192,110 @@ SETUP_SUSFS()
     
     echo " SuSFS v1.5.9 cloned successfully"
     
-    # Copy SuSFS source files to kernel source as specified by maintainer
+    # Copy SuSFS source files to kernel source
     echo " Integrating SuSFS v1.5.9 into kernel source..."
     
     # Copy fs files from kernel_patches/fs/ to fs/
     if [ -f "susfs4ksu/kernel_patches/fs/susfs.c" ]; then
-        echo " Copying SuSFS fs files from kernel_patches/fs/ to fs/..."
+        echo " Copying SuSFS fs files..."
         cp susfs4ksu/kernel_patches/fs/susfs.c fs/ 2>/dev/null || echo " Failed to copy susfs.c"
         cp susfs4ksu/kernel_patches/fs/sus_su.c fs/ 2>/dev/null || echo " Failed to copy sus_su.c"
     else
-        echo " No SuSFS fs files found in kernel_patches/fs/"
+        echo " No SuSFS fs files found"
     fi
     
     # Copy include files from kernel_patches/include/linux/ to include/linux/
     if [ -f "susfs4ksu/kernel_patches/include/linux/susfs.h" ]; then
-        echo " Copying SuSFS include files from kernel_patches/include/linux/ to include/linux/..."
+        echo " Copying SuSFS include files..."
         cp susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ 2>/dev/null || echo " Failed to copy susfs.h"
         cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/ 2>/dev/null || echo " Failed to copy susfs_def.h"
         cp susfs4ksu/kernel_patches/include/linux/sus_su.h include/linux/ 2>/dev/null || echo " Failed to copy sus_su.h"
     else
-        echo " No SuSFS include files found in kernel_patches/include/linux/"
+        echo " No SuSFS include files found"
     fi
     
-    # Apply manual compatibility changes for kernel 4.9
-    echo " Applying manual compatibility changes for kernel 4.9..."
+    # Apply manual kernel patches for SuSFS v1.5.9 integration
+    echo " Applying manual kernel patches for SuSFS v1.5.9..."
     
-    # Add SuSFS to fs/Makefile if not present
+    # 1. Update fs/Makefile to include SuSFS
     if ! grep -q "CONFIG_KSU_SUSFS" fs/Makefile; then
-        echo " Adding SuSFS to fs/Makefile for kernel 4.9 compatibility..."
-        # Find a good place to add SuSFS in fs/Makefile - add it early in the file
-        if grep -q "obj-y.*:=.*open.o" fs/Makefile; then
-            # Add after the main obj-y line but before buffer.o
-            sed -i '/^obj-y.*:=.*open\.o.*$/a\\nobj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile
+        echo " Adding SuSFS to fs/Makefile..."
+        # Add after line containing obj-y assignments and before CONFIG_BUFFER_HEAD
+        if grep -q "kernel_read_file.o.*remap_range.o" fs/Makefile; then
+            sed -i '/kernel_read_file\.o.*remap_range\.o/a\\nobj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile
         else
-            # Fallback: add at the end of the file
-            echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
+            # Fallback approach for kernel 4.9 structure
+            sed -i '/^obj-y.*:=.*$/a\\nobj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile
         fi
         echo " Added SuSFS to fs/Makefile"
     fi
     
-    # Note about additional compatibility requirements
-    echo " Note: SuSFS v1.5.9 may require additional kernel-specific modifications"
-    echo " The gki-android15-6.6 patch is not directly compatible with kernel 4.9"
-    echo " If compilation fails, manual source code changes may be needed"
+    # 2. Add SuSFS include to fs/exec.c for SUS_SU support
+    if [ -f "fs/exec.c" ] && ! grep -q "susfs_def.h" fs/exec.c; then
+        echo " Adding SuSFS include to fs/exec.c..."
+        # Add after asm/uaccess.h include (kernel 4.9 structure)
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS_SUS_SU\n#include <linux/susfs_def.h>\n#endif' fs/exec.c
+        echo " Added SuSFS include to fs/exec.c"
+    fi
     
-    echo " SuSFS v1.5.9 setup completed with manual compatibility for kernel 4.9"
+    # 3. Add SuSFS include to fs/devpts/inode.c  
+    if [ -f "fs/devpts/inode.c" ] && ! grep -q "susfs_def.h" fs/devpts/inode.c; then
+        echo " Adding SuSFS include to fs/devpts/inode.c..."
+        # Add after linux/seq_file.h include
+        sed -i '/#include <linux\/seq_file.h>/a\#ifdef CONFIG_KSU_SUSFS_SUS_SU\n#include <linux/susfs_def.h>\n#endif' fs/devpts/inode.c
+        echo " Added SuSFS include to fs/devpts/inode.c"
+    fi
+    
+    # 4. Add SuSFS include to fs/namei.c
+    if [ -f "fs/namei.c" ] && ! grep -q "susfs.h" fs/namei.c; then
+        echo " Adding SuSFS include to fs/namei.c..."
+        # Add after asm/uaccess.h include (consistent with kernel 4.9)
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif' fs/namei.c
+        echo " Added SuSFS include to fs/namei.c"
+    fi
+    
+    # 5. Add SuSFS include to fs/namespace.c
+    if [ -f "fs/namespace.c" ] && ! grep -q "susfs.h" fs/namespace.c; then
+        echo " Adding SuSFS include to fs/namespace.c..."
+        # Add after asm/uaccess.h include
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif' fs/namespace.c
+        echo " Added SuSFS include to fs/namespace.c"
+    fi
+    
+    # 6. Add SuSFS include to fs/open.c
+    if [ -f "fs/open.c" ] && ! grep -q "susfs.h" fs/open.c; then
+        echo " Adding SuSFS include to fs/open.c..."
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif' fs/open.c
+        echo " Added SuSFS include to fs/open.c"
+    fi
+    
+    # 7. Add SuSFS include to fs/readdir.c
+    if [ -f "fs/readdir.c" ] && ! grep -q "susfs.h" fs/readdir.c; then
+        echo " Adding SuSFS include to fs/readdir.c..."
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif' fs/readdir.c
+        echo " Added SuSFS include to fs/readdir.c"
+    fi
+    
+    # 8. Add SuSFS include to fs/stat.c  
+    if [ -f "fs/stat.c" ] && ! grep -q "susfs.h" fs/stat.c; then
+        echo " Adding SuSFS include to fs/stat.c..."
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif' fs/stat.c
+        echo " Added SuSFS include to fs/stat.c"
+    fi
+    
+    # 9. Add SuSFS include to fs/statfs.c
+    if [ -f "fs/statfs.c" ] && ! grep -q "susfs.h" fs/statfs.c; then
+        echo " Adding SuSFS include to fs/statfs.c..."
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif' fs/statfs.c
+        echo " Added SuSFS include to fs/statfs.c"
+    fi
+    
+    # Note about compilation
+    echo " Manual SuSFS v1.5.9 kernel patches applied"
+    echo " Note: Additional runtime hooks may need manual integration during compilation"
+    echo " If compilation fails, check for missing function calls in the modified files"
+    
+    echo " SuSFS v1.5.9 setup completed with manual kernel integration"
 }
 
 CLEAN_KSU_SUSFS()
