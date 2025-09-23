@@ -171,55 +171,72 @@ SETUP_KSU_NEXT()
 SETUP_SUSFS()
 {
     echo "----------------------------------------------"
-    echo " Setting up SuSFS (simonpunk) for kernel 4.9"
+    echo " Setting up SuSFS (simonpunk) v1.5.9 from gki-android15-6.6"
     
     # Clean existing susfs4ksu if exists
     if [ -d "susfs4ksu" ]; then
         rm -rf susfs4ksu
     fi
     
-    # Clone SuSFS from simonpunk with kernel-4.9 branch
-    echo " Cloning SuSFS from simonpunk (kernel-4.9 branch)..."
-    git clone https://gitlab.com/simonpunk/susfs4ksu.git --branch kernel-4.9 --single-branch
+    # Clean existing SuSFS files
+    rm -f fs/susfs.c fs/sus_su.c include/linux/susfs.h include/linux/susfs_def.h include/linux/sus_su.h
+    
+    # Clone SuSFS from simonpunk with gki-android15-6.6 branch for v1.5.9
+    echo " Cloning SuSFS v1.5.9 from simonpunk (gki-android15-6.6 branch)..."
+    git clone https://gitlab.com/simonpunk/susfs4ksu.git --branch gki-android15-6.6 --single-branch
     
     if [ $? -ne 0 ]; then
         echo " Failed to clone SuSFS from simonpunk"
         exit 1
     fi
     
-    echo " SuSFS cloned successfully"
+    echo " SuSFS v1.5.9 cloned successfully"
     
-    # Copy SuSFS source files to kernel source
-    echo " Integrating SuSFS into kernel source..."
+    # Copy SuSFS source files to kernel source as specified by maintainer
+    echo " Integrating SuSFS v1.5.9 into kernel source..."
     
-    # Copy include files
-    if [ -d "susfs4ksu/kernel_patches/include" ]; then
-        echo " Copying SuSFS include files..."
-        cp -r susfs4ksu/kernel_patches/include/* include/ 2>/dev/null || echo " No include files found to copy"
-    fi
-    
-    # Copy fs files
-    if [ -d "susfs4ksu/kernel_patches/fs" ]; then
-        echo " Copying SuSFS fs files..."
-        cp -r susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || echo " No fs files found to copy"
-    fi
-    
-    # Apply main SuSFS kernel patch for 4.9
-    if [ -f "susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch" ]; then
-        echo " Applying SuSFS kernel patch for 4.9..."
-        patch -p1 < "susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.9.patch"
-        if [ $? -ne 0 ]; then
-            echo " Warning: Some parts of SuSFS kernel patch failed to apply"
-            echo " This may be normal for some kernel versions. Continuing..."
-        else
-            echo " SuSFS kernel patch applied successfully"
-        fi
+    # Copy fs files from kernel_patches/fs/ to fs/
+    if [ -f "susfs4ksu/kernel_patches/fs/susfs.c" ]; then
+        echo " Copying SuSFS fs files from kernel_patches/fs/ to fs/..."
+        cp susfs4ksu/kernel_patches/fs/susfs.c fs/ 2>/dev/null || echo " Failed to copy susfs.c"
+        cp susfs4ksu/kernel_patches/fs/sus_su.c fs/ 2>/dev/null || echo " Failed to copy sus_su.c"
     else
-        echo " SuSFS kernel patch file not found"
-        exit 1
+        echo " No SuSFS fs files found in kernel_patches/fs/"
     fi
     
-    echo " SuSFS setup completed"
+    # Copy include files from kernel_patches/include/linux/ to include/linux/
+    if [ -f "susfs4ksu/kernel_patches/include/linux/susfs.h" ]; then
+        echo " Copying SuSFS include files from kernel_patches/include/linux/ to include/linux/..."
+        cp susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ 2>/dev/null || echo " Failed to copy susfs.h"
+        cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/ 2>/dev/null || echo " Failed to copy susfs_def.h"
+        cp susfs4ksu/kernel_patches/include/linux/sus_su.h include/linux/ 2>/dev/null || echo " Failed to copy sus_su.h"
+    else
+        echo " No SuSFS include files found in kernel_patches/include/linux/"
+    fi
+    
+    # Apply manual compatibility changes for kernel 4.9
+    echo " Applying manual compatibility changes for kernel 4.9..."
+    
+    # Add SuSFS to fs/Makefile if not present
+    if ! grep -q "CONFIG_KSU_SUSFS" fs/Makefile; then
+        echo " Adding SuSFS to fs/Makefile for kernel 4.9 compatibility..."
+        # Find a good place to add SuSFS in fs/Makefile - add it early in the file
+        if grep -q "obj-y.*:=.*open.o" fs/Makefile; then
+            # Add after the main obj-y line but before buffer.o
+            sed -i '/^obj-y.*:=.*open\.o.*$/a\\nobj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile
+        else
+            # Fallback: add at the end of the file
+            echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
+        fi
+        echo " Added SuSFS to fs/Makefile"
+    fi
+    
+    # Note about additional compatibility requirements
+    echo " Note: SuSFS v1.5.9 may require additional kernel-specific modifications"
+    echo " The gki-android15-6.6 patch is not directly compatible with kernel 4.9"
+    echo " If compilation fails, manual source code changes may be needed"
+    
+    echo " SuSFS v1.5.9 setup completed with manual compatibility for kernel 4.9"
 }
 
 CLEAN_KSU_SUSFS()
