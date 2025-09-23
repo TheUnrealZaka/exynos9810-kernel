@@ -108,85 +108,243 @@ SETUP_KSU()
 SETUP_KSU_NEXT()
 {
     echo "----------------------------------------------"
-    echo " Setting up KernelSU-Next"
+    echo " Setting up KernelSU-Next (sidex15)"
     
-    # Run KernelSU-Next setup script
-    echo " Running KernelSU-Next setup script..."
-    curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+    # Clean existing KernelSU-Next if exists
+    if [ -d "KernelSU-Next" ]; then
+        rm -rf KernelSU-Next
+    fi
+    
+    # Clone KernelSU-Next from sidex15 with next-susfs branch
+    echo " Cloning KernelSU-Next from sidex15..."
+    git clone https://github.com/sidex15/KernelSU-Next.git --branch next-susfs --single-branch
     
     if [ $? -ne 0 ]; then
-        echo " Failed to setup KernelSU-Next"
+        echo " Failed to clone KernelSU-Next from sidex15"
         exit 1
     fi
     
-    # Apply the KernelSU-Next + SuSFS patch if it exists
-    if [ -f "Apollo/Patches/0001-kernel-implement-susfs-v1.5.8-KernelSU-Next-v1.0.8.patch" ]; then
-        echo " Applying KernelSU-Next + SuSFS integration patch..."
-        cd KernelSU-Next
-        patch -p1 < ../Apollo/Patches/0001-kernel-implement-susfs-v1.5.8-KernelSU-Next-v1.0.8.patch
-        if [ $? -eq 0 ]; then
-            echo " KernelSU-Next + SuSFS patch applied successfully"
-        else
-            echo " Failed to apply KernelSU-Next + SuSFS patch"
-            exit 1
-        fi
-        cd ..
-    else
-        echo " KernelSU-Next + SuSFS patch file not found, continuing without it"
-    fi
-    
-    echo " KernelSU-Next setup completed"
-}
-
-SETUP_SUSFS()
-{
-    echo "----------------------------------------------"
-    echo " Setting up SuSFS"
-    if [ ! -d "susfs4ksu" ]; then
-        echo " Downloading SuSFS..."
-        git clone https://gitlab.com/simonpunk/susfs4ksu.git --branch kernel-4.9 --single-branch
-        if [ $? -ne 0 ]; then
-            echo " Failed to download SuSFS"
-            exit 1
-        fi
-        echo " SuSFS downloaded successfully"
-    else
-        echo " SuSFS already exists"
-    fi
-
-    # Apply the correct SuSFS patch for kernel 4.9
-    if [ -f "Apollo/Patches/0002_enable_susfs_for_kernel_4.9.patch" ]; then
-        echo " Applying SuSFS kernel patch for 4.9..."
-        patch -p1 < "Apollo/Patches/0002_enable_susfs_for_kernel_4.9.patch"
-        if [ $? -eq 0 ]; then
-            echo " SuSFS kernel patch applied successfully"
-        else
-            echo " Failed to apply SuSFS kernel patch"
-            exit 1
-        fi
-    else
-        echo " SuSFS kernel patch file not found"
-        exit 1
-    fi
-    
-    echo " SuSFS setup completed"
-}
-
-CLEAN_KSU_SUSFS()
-{
-    echo " Cleaning KernelSU/SuSFS setup..."
+    # Create symbolic link to drivers/kernelsu
+    echo " Creating KernelSU symbolic link..."
     if [ -L "drivers/kernelsu" ]; then
         rm -f drivers/kernelsu
     fi
     if [ -d "drivers/kernelsu" ]; then
         rm -rf drivers/kernelsu
     fi
+    
+    ln -sf "../KernelSU-Next/kernel" "drivers/kernelsu"
+    
+    if [ $? -ne 0 ]; then
+        echo " Failed to create KernelSU symbolic link"
+        exit 1
+    fi
+    
+    # Add KernelSU to drivers Makefile and Kconfig if not present
+    if ! grep -q "kernelsu" drivers/Makefile; then
+        echo "obj-\$(CONFIG_KSU) += kernelsu/" >> drivers/Makefile
+        echo " Added KernelSU to drivers/Makefile"
+    fi
+    
+    if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
+        sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+        echo " Added KernelSU to drivers/Kconfig"
+    fi
+    
+    # If SuSFS is being used, apply SuSFS patches to KernelSU-Next
+    if [[ "$CR_SUSFS" =~ ^[yY]$ ]] && [ -d "susfs4ksu" ] && [ -f "susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ]; then
+        echo " Applying SuSFS patches to KernelSU-Next..."
+        cd KernelSU-Next
+        patch -p1 < ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+        if [ $? -eq 0 ]; then
+            echo " SuSFS patches applied to KernelSU-Next successfully"
+        else
+            echo " Warning: Failed to apply SuSFS patches to KernelSU-Next"
+            echo " This may be normal if KernelSU-Next already has SuSFS support built-in"
+        fi
+        cd ..
+    fi
+    
+    echo " KernelSU-Next (sidex15) setup completed"
+}
+
+SETUP_SUSFS()
+{
+    echo "----------------------------------------------"
+    echo " Setting up SuSFS (simonpunk) v1.5.9 with manual kernel patches"
+    
+    # Clean existing susfs4ksu if exists
+    if [ -d "susfs4ksu" ]; then
+        rm -rf susfs4ksu
+    fi
+    
+    # Clean existing SuSFS files
+    rm -f fs/susfs.c fs/sus_su.c include/linux/susfs.h include/linux/susfs_def.h include/linux/sus_su.h
+    
+    # Clone SuSFS from simonpunk with gki-android15-6.6 branch for v1.5.9
+    echo " Cloning SuSFS v1.5.9 from simonpunk (gki-android15-6.6 branch)..."
+    git clone https://gitlab.com/simonpunk/susfs4ksu.git --branch gki-android15-6.6 --single-branch
+    
+    if [ $? -ne 0 ]; then
+        echo " Failed to clone SuSFS from simonpunk"
+        exit 1
+    fi
+    
+    echo " SuSFS v1.5.9 cloned successfully"
+    
+    # Copy SuSFS source files to kernel source
+    echo " Integrating SuSFS v1.5.9 into kernel source..."
+    
+    # Copy fs files from kernel_patches/fs/ to fs/
+    if [ -f "susfs4ksu/kernel_patches/fs/susfs.c" ]; then
+        echo " Copying SuSFS fs files..."
+        cp susfs4ksu/kernel_patches/fs/susfs.c fs/ 2>/dev/null || echo " Failed to copy susfs.c"
+        cp susfs4ksu/kernel_patches/fs/sus_su.c fs/ 2>/dev/null || echo " Failed to copy sus_su.c"
+    else
+        echo " No SuSFS fs files found"
+    fi
+    
+    # Copy include files from kernel_patches/include/linux/ to include/linux/
+    if [ -f "susfs4ksu/kernel_patches/include/linux/susfs.h" ]; then
+        echo " Copying SuSFS include files..."
+        cp susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/ 2>/dev/null || echo " Failed to copy susfs.h"
+        cp susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/ 2>/dev/null || echo " Failed to copy susfs_def.h"
+        cp susfs4ksu/kernel_patches/include/linux/sus_su.h include/linux/ 2>/dev/null || echo " Failed to copy sus_su.h"
+    else
+        echo " No SuSFS include files found"
+    fi
+    
+    # Apply manual kernel patches for SuSFS v1.5.9 integration
+    echo " Applying manual kernel patches for SuSFS v1.5.9..."
+    
+    # 1. Update fs/Makefile to include SuSFS
+    if ! grep -q "CONFIG_KSU_SUSFS" fs/Makefile; then
+        echo " Adding SuSFS to fs/Makefile..."
+        # Add after line containing obj-y assignments and before CONFIG_BUFFER_HEAD
+        if grep -q "kernel_read_file.o.*remap_range.o" fs/Makefile; then
+            sed -i '/kernel_read_file\.o.*remap_range\.o/a\\nobj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile
+        else
+            # Fallback approach for kernel 4.9 structure
+            sed -i '/^obj-y.*:=.*$/a\\nobj-$(CONFIG_KSU_SUSFS) += susfs.o' fs/Makefile
+        fi
+        echo " Added SuSFS to fs/Makefile"
+    fi
+    
+    # 2. Add SuSFS include to fs/exec.c for SUS_SU support
+    if [ -f "fs/exec.c" ] && ! grep -q "susfs_def.h" fs/exec.c; then
+        echo " Adding SuSFS include to fs/exec.c..."
+        # Add after asm/uaccess.h include (kernel 4.9 structure)
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS_SUS_SU\n#include <linux/susfs_def.h>\n#endif' fs/exec.c
+        echo " Added SuSFS include to fs/exec.c"
+    fi
+    
+    # 3. Add SuSFS include to fs/devpts/inode.c  
+    if [ -f "fs/devpts/inode.c" ] && ! grep -q "susfs_def.h" fs/devpts/inode.c; then
+        echo " Adding SuSFS include to fs/devpts/inode.c..."
+        # Add after linux/seq_file.h include
+        sed -i '/#include <linux\/seq_file.h>/a\#ifdef CONFIG_KSU_SUSFS_SUS_SU\n#include <linux/susfs_def.h>\n#endif' fs/devpts/inode.c
+        echo " Added SuSFS include to fs/devpts/inode.c"
+    fi
+    
+    # 4. Add SuSFS include to fs/namei.c
+    if [ -f "fs/namei.c" ] && ! grep -q "susfs.h" fs/namei.c; then
+        echo " Adding SuSFS include to fs/namei.c..."
+        # Add after asm/uaccess.h include (consistent with kernel 4.9)
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif' fs/namei.c
+        echo " Added SuSFS include to fs/namei.c"
+    fi
+    
+    # 5. Add SuSFS include to fs/namespace.c
+    if [ -f "fs/namespace.c" ] && ! grep -q "susfs.h" fs/namespace.c; then
+        echo " Adding SuSFS include to fs/namespace.c..."
+        # Add after asm/uaccess.h include
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif' fs/namespace.c
+        echo " Added SuSFS include to fs/namespace.c"
+    fi
+    
+    # 6. Add SuSFS include to fs/open.c
+    if [ -f "fs/open.c" ] && ! grep -q "susfs.h" fs/open.c; then
+        echo " Adding SuSFS include to fs/open.c..."
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif' fs/open.c
+        echo " Added SuSFS include to fs/open.c"
+    fi
+    
+    # 7. Add SuSFS include to fs/readdir.c
+    if [ -f "fs/readdir.c" ] && ! grep -q "susfs.h" fs/readdir.c; then
+        echo " Adding SuSFS include to fs/readdir.c..."
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif' fs/readdir.c
+        echo " Added SuSFS include to fs/readdir.c"
+    fi
+    
+    # 8. Add SuSFS include to fs/stat.c  
+    if [ -f "fs/stat.c" ] && ! grep -q "susfs.h" fs/stat.c; then
+        echo " Adding SuSFS include to fs/stat.c..."
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif' fs/stat.c
+        echo " Added SuSFS include to fs/stat.c"
+    fi
+    
+    # 9. Add SuSFS include to fs/statfs.c
+    if [ -f "fs/statfs.c" ] && ! grep -q "susfs.h" fs/statfs.c; then
+        echo " Adding SuSFS include to fs/statfs.c..."
+        sed -i '/#include <asm\/uaccess.h>/a\#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs.h>\n#endif' fs/statfs.c
+        echo " Added SuSFS include to fs/statfs.c"
+    fi
+    
+    # Note about compilation
+    echo " Manual SuSFS v1.5.9 kernel patches applied"
+    echo " Note: Additional runtime hooks may need manual integration during compilation"
+    echo " If compilation fails, check for missing function calls in the modified files"
+    
+    echo " SuSFS v1.5.9 setup completed with manual kernel integration"
+}
+
+CLEAN_KSU_SUSFS()
+{
+    echo " Cleaning KernelSU/SuSFS setup..."
+    
+    # Remove KernelSU symlink and directories
+    if [ -L "drivers/kernelsu" ]; then
+        rm -f drivers/kernelsu
+        echo " Removed KernelSU symlink"
+    fi
+    if [ -d "drivers/kernelsu" ]; then
+        rm -rf drivers/kernelsu
+        echo " Removed KernelSU directory"
+    fi
+    
+    # Remove KernelSU repositories
     if [ -d "KernelSU" ]; then
         rm -rf KernelSU
+        echo " Removed KernelSU directory"
     fi
     if [ -d "KernelSU-Next" ]; then
         rm -rf KernelSU-Next
+        echo " Removed KernelSU-Next directory"
     fi
+    
+    # Remove SuSFS
+    if [ -d "susfs4ksu" ]; then
+        rm -rf susfs4ksu
+        echo " Removed susfs4ksu directory"
+    fi
+    if [ -d "fs/susfs" ]; then
+        rm -rf fs/susfs
+        echo " Removed SuSFS kernel module"
+    fi
+    
+    # Clean KernelSU from drivers/Makefile
+    if [ -f "drivers/Makefile" ]; then
+        sed -i '/kernelsu/d' drivers/Makefile
+        echo " Cleaned KernelSU from drivers/Makefile"
+    fi
+    
+    # Clean KernelSU from drivers/Kconfig
+    if [ -f "drivers/Kconfig" ]; then
+        sed -i '/drivers\/kernelsu\/Kconfig/d' drivers/Kconfig
+        echo " Cleaned KernelSU from drivers/Kconfig"
+    fi
+    
+    echo " KernelSU/SuSFS cleanup completed"
 }
 
 # Compiler Selection

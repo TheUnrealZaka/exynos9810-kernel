@@ -875,6 +875,27 @@ int sb_prepare_remount_readonly(struct super_block *sb)
 	if (atomic_long_read(&sb->s_remove_count))
 		return -EBUSY;
 
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+	// - If caller process is zygote, then it is a normal mount, so we calculate the next available 
+	//   fake mnt_id for this mount
+	if (susfs_is_current_zygote_domain()) {
+		mnt_ns = current->nsproxy->mnt_ns;
+		if (mnt_ns) {
+			get_mnt_ns(mnt_ns);
+			rcu_read_lock();
+			mnt_id = list_first_entry(&mnt_ns->list, struct mount, mnt_list)->mnt_id;
+			list_for_each_entry_rcu(m, &mnt_ns->list, mnt_list) {
+				if (m->mnt_id < DEFAULT_SUS_MNT_ID) {
+					mnt_id++;
+				}
+			}
+			WRITE_ONCE(mnt->mnt.susfs_mnt_id_backup, READ_ONCE(mnt->mnt_id));
+			WRITE_ONCE(mnt->mnt_id, READ_ONCE(mnt_id));
+			rcu_read_unlock();
+			put_mnt_ns(mnt_ns);
+		}
+	}
+#endif
 	lock_mount_hash();
 	list_for_each_entry(mnt, &sb->s_mounts, mnt_instance) {
 #ifdef CONFIG_RKP_NS_PROT
@@ -2407,6 +2428,9 @@ struct mount *copy_tree(struct mount *mnt, struct dentry *dentry,
 					int flag)
 {
 	struct mount *res, *p, *q, *r, *parent;
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+	bool is_zygote_not_copy_mnt_ns = (susfs_is_current_zygote_domain() && !(flag & CL_COPY_MNT_NS));
+#endif
 
 	if (!(flag & CL_COPY_UNBINDABLE) && IS_MNT_UNBINDABLE(mnt))
 		return ERR_PTR(-EINVAL);
@@ -2423,6 +2447,9 @@ struct mount *copy_tree(struct mount *mnt, struct dentry *dentry,
 	p = mnt;
 	list_for_each_entry(r, &mnt->mnt_mounts, mnt_child) {
 		struct mount *s;
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+		int attach_mnt_count = 0;
+#endif
 		if (!is_subdir(r->mnt_mountpoint, dentry))
 			continue;
 
@@ -2460,6 +2487,14 @@ struct mount *copy_tree(struct mount *mnt, struct dentry *dentry,
 #endif
 			if (IS_ERR(q))
 				goto out;
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+			if (is_zygote_not_copy_mnt_ns &&
+				q->mnt_id < DEFAULT_SUS_MNT_ID)
+			{
+				attach_mnt_count++;
+				q->mnt_id += attach_mnt_count;
+			}
+#endif
 			lock_mount_hash();
 			list_add_tail(&q->mnt_list, &res->mnt_list);
 			attach_mnt(q, parent, p->mnt_mp);
@@ -3790,6 +3825,12 @@ struct mnt_namespace *copy_mnt_ns(unsigned long flags, struct mnt_namespace *ns,
 	 */
 	p = old;
 	q = new;
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+	if (likely(is_zygote_pid)) {
+		last_entry_mnt_id = new->mnt_id;
+		q->mnt.susfs_mnt_id_backup = new->mnt_id;
+	}
+#endif
 	while (p) {
 		q->mnt_ns = new_ns;
 		new_ns->mounts++;
@@ -3932,6 +3973,13 @@ SYSCALL_DEFINE5(mount, char __user *, dev_name, char __user *, dir_name,
 		goto out_data;
 
 	ret = do_mount(kernel_dev, dir_name, kernel_type, flags, options);
+
+#if defined(CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT) && defined(CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT)
+	// Just for the compatibility of Magic Mount KernelSU
+	if (!ret && susfs_is_auto_add_sus_ksu_default_mount_enabled && susfs_is_current_ksu_domain()) {
+		susfs_auto_add_sus_ksu_default_mount(dir_name);
+	}
+#endif
 
 	kfree(options);
 out_data:

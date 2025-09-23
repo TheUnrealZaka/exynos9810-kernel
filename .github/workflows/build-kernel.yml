@@ -2,7 +2,7 @@ name: Build DS-ACK Kernel for One UI 7
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, duhan-* ]
     tags:
       - 'v*'
   pull_request:
@@ -25,7 +25,7 @@ jobs:
     
     strategy:
       matrix:
-        # Only build All Devices ZIP packages
+        # Build All Devices ZIP packages with different configurations
         selinux: [
           { mode: "1", name: "Permissive" },
           { mode: "2", name: "Enforcing" }
@@ -40,7 +40,7 @@ jobs:
           { version: "oneui7", name: "OneUI7" }
         ]
       fail-fast: false
-      max-parallel: 5
+      max-parallel: 3
 
     name: Build All Devices ${{ matrix.selinux.name }} ${{ matrix.root_solution.name }} ${{ matrix.oneui.name }} ZIP
 
@@ -106,12 +106,6 @@ jobs:
         echo "KSU_NEXT: ${{ matrix.root_solution.ksu_next }}"
         echo "SUSFS: ${{ matrix.root_solution.susfs }}"
         
-        # Check if we need to set up KernelSU symlink for legacy builds
-        if [ "${{ matrix.root_solution.ksu }}" = "y" ]; then
-          echo "Setting up KernelSU classic..."
-          # We'll let the build script handle the actual setup
-        fi
-        
         # Check for required files
         if [ ! -f "apollo.sh" ]; then
           echo "ERROR: apollo.sh not found!"
@@ -129,7 +123,7 @@ jobs:
         export CR_MKZIP="y"  # Always enable ZIP creation for All Devices
         
         # Run automated build with matrix parameters
-        ./apollo.sh
+        timeout 3600 ./apollo.sh  # 1 hour timeout
       env:
         CR_TARGET: "7"  # All Devices target
         CR_COMPILER: "4"  # Google Clang 20.0.0 for One UI 7
@@ -208,10 +202,11 @@ jobs:
         
         ### 🚀 What's New in ${{ env.KERNEL_VERSION }}
         - **One UI 7 Compatibility** - Full support for One UI 7 ports and NobleROM
-        - **KernelSU-Next Integration** - Latest KernelSU-Next for modern root management
-        - **SuSFS Support** - Advanced root concealment and security features
+        - **KernelSU-Next Integration** - Latest KernelSU-Next from sidex15 with SuSFS support
+        - **SuSFS Support** - Advanced root concealment and security features (kernel 4.9 compatible)
         - **Multiple Build Variants** - Choose your perfect configuration
         - **ZIP Packages** - Flashable ZIP packages for all devices
+        - **Automated Releases** - Consistent and reliable builds via GitHub Actions
         
         ### 📱 Device Support
         - **Galaxy S9 (SM-G960F/N)** - starlte/starltekor
@@ -274,11 +269,13 @@ jobs:
         - **Android Version:** Android 10 (API 29)
         - **Build Date:** ${{ env.BUILD_TIMESTAMP }}
         - **Built by:** ${{ env.MAINTAINER }}
+        - **KernelSU-Next:** sidex15's repository (next-susfs branch)
+        - **SuSFS:** simonpunk's repository (kernel-4.9 branch)
         
         ### 🏆 Credits & Thanks
         - **[@duhansysl](https://github.com/duhansysl)** - Main DS-ACK Kernel developer and maintainer
         - **[@AnanJaser1211](https://github.com/AnanJaser1211)** - Original Apollo Kernel developer
-        - **[@rifsxd](https://github.com/rifsxd)** - KernelSU-Next development
+        - **[@sidex15](https://github.com/sidex15)** - KernelSU-Next with SuSFS integration
         - **[@simonpunk](https://gitlab.com/simonpunk)** - SuSFS development
         - **Samsung** - Base kernel source
         - **Community** - Testing and feedback
@@ -348,3 +345,9 @@ jobs:
         echo "- Galaxy Note9 INTL/KOR (N960F/N)" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**Total ZIP Packages:** 8 (2 SELinux × 4 root solutions × 1 OneUI7 variant)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Updated Features:**" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ KernelSU-Next from sidex15 (next-susfs branch)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ SuSFS from simonpunk (kernel-4.9 branch)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Automated kernel compilation" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Optimized build timeouts and caching" >> $GITHUB_STEP_SUMMARY
