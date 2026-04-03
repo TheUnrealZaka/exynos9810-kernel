@@ -724,7 +724,7 @@ static void __schedtune_group_util_update(struct schedtune *st)
 	if (time_before(now, gb->next_update_time))
 		goto out;
 
-	css_task_iter_start(&st->css, &it);
+	css_task_iter_start(&st->css, 0, &it);
 	while ((p = css_task_iter_next(&it))) {
 		unsigned long clock_task, delta, util;
 
