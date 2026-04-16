@@ -105,11 +105,6 @@ static ssize_t show_cpufreq_min_limit(struct kobject *kobj,
 					first_domain()->min_freq >> (scale * SCALE_SIZE));
 }
 
-static struct ucc_req ucc_req =
-{
-	.name = "ufc",
-};
-static int ucc_requested;
 static bool boosted;
 
 static inline void control_boost(bool enable)
