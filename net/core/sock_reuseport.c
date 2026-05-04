@@ -7,11 +7,33 @@
 
 #include <net/sock_reuseport.h>
 #include <linux/bpf.h>
+#include <linux/idr.h>
 #include <linux/rcupdate.h>
 
 #define INIT_SOCKS 128
 
-static DEFINE_SPINLOCK(reuseport_lock);
+DEFINE_SPINLOCK(reuseport_lock);
+
+#define REUSEPORT_MIN_ID 1
+static DEFINE_IDA(reuseport_ida);
+
+int reuseport_get_id(struct sock_reuseport *reuse)
+{
+	int id;
+
+	if (reuse->reuseport_id)
+		return reuse->reuseport_id;
+
+	id = ida_simple_get(&reuseport_ida, REUSEPORT_MIN_ID, 0,
+			    /* Called under reuseport_lock */
+			    GFP_ATOMIC);
+	if (id < 0)
+		return id;
+
+	reuse->reuseport_id = id;
+
+	return reuse->reuseport_id;
+}
 
 static struct sock_reuseport *__reuseport_alloc(u16 max_socks)
 {
@@ -28,7 +50,7 @@ static struct sock_reuseport *__reuseport_alloc(u16 max_socks)
 	return reuse;
 }
 
-int reuseport_alloc(struct sock *sk)
+int reuseport_alloc(struct sock *sk, bool bind_inany)
 {
 	struct sock_reuseport *reuse;
 
@@ -40,9 +62,17 @@ int reuseport_alloc(struct sock *sk)
 	/* Allocation attempts can occur concurrently via the setsockopt path
 	 * and the bind/hash path.  Nothing to do when we lose the race.
 	 */
-	if (rcu_dereference_protected(sk->sk_reuseport_cb,
-				      lockdep_is_held(&reuseport_lock)))
+	reuse = rcu_dereference_protected(sk->sk_reuseport_cb,
+					  lockdep_is_held(&reuseport_lock));
+	if (reuse) {
+		/* Only set reuse->bind_inany if the bind_inany is true.
+		 * Otherwise, it will overwrite the reuse->bind_inany
+		 * which was set by the bind/hash path.
+		 */
+		if (bind_inany)
+			reuse->bind_inany = bind_inany;
 		goto out;
+	}
 
 	reuse = __reuseport_alloc(INIT_SOCKS);
 	if (!reuse) {
@@ -52,6 +82,7 @@ int reuseport_alloc(struct sock *sk)
 
 	reuse->socks[0] = sk;
 	reuse->num_socks = 1;
+	reuse->bind_inany = bind_inany;
 	rcu_assign_pointer(sk->sk_reuseport_cb, reuse);
 
 out:
@@ -77,9 +108,12 @@ static struct sock_reuseport *reuseport_grow(struct sock_reuseport *reuse)
 	more_reuse->max_socks = more_socks_size;
 	more_reuse->num_socks = reuse->num_socks;
 	more_reuse->prog = reuse->prog;
+	more_reuse->reuseport_id = reuse->reuseport_id;
+	more_reuse->bind_inany = reuse->bind_inany;
 
 	memcpy(more_reuse->socks, reuse->socks,
 	       reuse->num_socks * sizeof(struct sock *));
+	more_reuse->synq_overflow_ts = READ_ONCE(reuse->synq_overflow_ts);
 
 	for (i = 0; i < reuse->num_socks; ++i)
 		rcu_assign_pointer(reuse->socks[i]->sk_reuseport_cb,
@@ -100,6 +134,8 @@ static void reuseport_free_rcu(struct rcu_head *head)
 	reuse = container_of(head, struct sock_reuseport, rcu);
 	if (reuse->prog)
 		bpf_prog_destroy(reuse->prog);
+	if (reuse->reuseport_id)
+		ida_simple_remove(&reuseport_ida, reuse->reuseport_id);
 	kfree(reuse);
 }
 
@@ -109,12 +145,12 @@ static void reuseport_free_rcu(struct rcu_head *head)
  *  @sk2: Socket belonging to the existing reuseport group.
  *  May return ENOMEM and not add socket to group under memory pressure.
  */
-int reuseport_add_sock(struct sock *sk, struct sock *sk2)
+int reuseport_add_sock(struct sock *sk, struct sock *sk2, bool bind_inany)
 {
 	struct sock_reuseport *old_reuse, *reuse;
 
 	if (!rcu_access_pointer(sk2->sk_reuseport_cb)) {
-		int err = reuseport_alloc(sk2);
+		int err = reuseport_alloc(sk2, bind_inany);
 
 		if (err)
 			return err;
@@ -159,6 +195,14 @@ void reuseport_detach_sock(struct sock *sk)
 	spin_lock_bh(&reuseport_lock);
 	reuse = rcu_dereference_protected(sk->sk_reuseport_cb,
 					  lockdep_is_held(&reuseport_lock));
+
+	/* At least one of the sk in this reuseport group is added to
+	 * a bpf map.  Notify the bpf side.  The bpf map logic will
+	 * remove the sk if it is indeed added to a bpf map.
+	 */
+	if (reuse->reuseport_id)
+		bpf_sk_reuseport_detach(sk);
+
 	rcu_assign_pointer(sk->sk_reuseport_cb, NULL);
 
 	for (i = 0; i < reuse->num_socks; i++) {

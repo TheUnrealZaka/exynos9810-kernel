@@ -433,6 +433,7 @@ void tcp_openreq_init_rwin(struct request_sock *req,
 	int mss = dst_metric_advmss(dst);
 	u32 window_clamp;
 	__u8 rcv_wscale;
+	u32 rcv_wnd;
 
 	if (user_mss && user_mss < mss)
 		mss = user_mss;
@@ -446,14 +447,30 @@ void tcp_openreq_init_rwin(struct request_sock *req,
 	    (req->rsk_window_clamp > full_space || req->rsk_window_clamp == 0))
 		req->rsk_window_clamp = full_space;
 
+	rcv_wnd = tcp_rwnd_init_bpf((struct sock *)req);
+	if (rcv_wnd == 0)
+		rcv_wnd = dst_metric(dst, RTAX_INITRWND);
+	else if (full_space < rcv_wnd * mss)
+		full_space = rcv_wnd * mss;
+
 	/* tcp_full_space because it is guaranteed to be the first packet */
-	tcp_select_initial_window(sock_net(sk_listener), full_space,
+#ifdef CONFIG_MPTCP
+	tp->ops->select_initial_window(tcp_full_space(sk_listener),
+		mss - (ireq->tstamp_ok ? TCPOLEN_TSTAMP_ALIGNED : 0) -
+		(ireq->saw_mpc ? MPTCP_SUB_LEN_DSM_ALIGN : 0),
+#else
+	tcp_select_initial_window(full_space,
 		mss - (ireq->tstamp_ok ? TCPOLEN_TSTAMP_ALIGNED : 0),
+#endif
 		&req->rsk_rcv_wnd,
 		&req->rsk_window_clamp,
 		ireq->wscale_ok,
 		&rcv_wscale,
-		dst_metric(dst, RTAX_INITRWND));
+		rcv_wnd
+#ifdef CONFIG_MPTCP
+		, sk_listener
+#endif
+		);
 	ireq->rcv_wscale = rcv_wscale;
 }
 EXPORT_SYMBOL(tcp_openreq_init_rwin);

@@ -20,6 +20,9 @@
 #include <linux/mpls.h>
 #include <net/flow_dissector.h>
 #include <scsi/fc/fc_fcoe.h>
+#include <linux/bpf.h>
+
+static DEFINE_MUTEX(flow_dissector_mutex);
 
 static void dissector_set_key(struct flow_dissector *flow_dissector,
 			      enum flow_dissector_key_id key_id)
@@ -57,6 +60,84 @@ void skb_flow_dissector_init(struct flow_dissector *flow_dissector,
 }
 EXPORT_SYMBOL(skb_flow_dissector_init);
 
+int skb_flow_dissector_prog_query(const union bpf_attr *attr,
+				  union bpf_attr __user *uattr)
+{
+	__u32 __user *prog_ids = u64_to_user_ptr(attr->query.prog_ids);
+	u32 prog_id, prog_cnt = 0, flags = 0;
+	struct bpf_prog *attached;
+	struct net *net;
+
+	if (attr->query.query_flags)
+		return -EINVAL;
+
+	net = get_net_ns_by_fd(attr->query.target_fd);
+	if (IS_ERR(net))
+		return PTR_ERR(net);
+
+	rcu_read_lock();
+	attached = rcu_dereference(net->flow_dissector_prog);
+	if (attached) {
+		prog_cnt = 1;
+		prog_id = attached->aux->id;
+	}
+	rcu_read_unlock();
+
+	put_net(net);
+
+	if (copy_to_user(&uattr->query.attach_flags, &flags, sizeof(flags)))
+		return -EFAULT;
+	if (copy_to_user(&uattr->query.prog_cnt, &prog_cnt, sizeof(prog_cnt)))
+		return -EFAULT;
+
+	if (!attr->query.prog_cnt || !prog_ids || !prog_cnt)
+		return 0;
+
+	if (copy_to_user(prog_ids, &prog_id, sizeof(u32)))
+		return -EFAULT;
+
+	return 0;
+}
+
+int skb_flow_dissector_bpf_prog_attach(const union bpf_attr *attr,
+ 				       struct bpf_prog *prog)
+{
+ 	struct bpf_prog *attached;
+ 	struct net *net;
+
+ 	net = current->nsproxy->net_ns;
+ 	mutex_lock(&flow_dissector_mutex);
+ 	attached = rcu_dereference_protected(net->flow_dissector_prog,
+ 					     lockdep_is_held(&flow_dissector_mutex));
+ 	if (attached) {
+ 		/* Only one BPF program can be attached at a time */
+ 		mutex_unlock(&flow_dissector_mutex);
+ 		return -EEXIST;
+ 	}
+ 	rcu_assign_pointer(net->flow_dissector_prog, prog);
+ 	mutex_unlock(&flow_dissector_mutex);
+ 	return 0;
+}
+
+int skb_flow_dissector_bpf_prog_detach(const union bpf_attr *attr)
+{
+ 	struct bpf_prog *attached;
+ 	struct net *net;
+ 
+ 	net = current->nsproxy->net_ns;
+ 	mutex_lock(&flow_dissector_mutex);
+ 	attached = rcu_dereference_protected(net->flow_dissector_prog,
+ 					     lockdep_is_held(&flow_dissector_mutex));
+ 	if (!attached) {
+ 		mutex_unlock(&flow_dissector_mutex);
+ 		return -ENOENT;
+ 	}
+ 	bpf_prog_put(attached);
+ 	RCU_INIT_POINTER(net->flow_dissector_prog, NULL);
+ 	mutex_unlock(&flow_dissector_mutex);
+ 	return 0;
+}
+
 /**
  * __skb_flow_get_ports - extract the upper layer ports and return them
  * @skb: sk_buff to extract the ports from
@@ -90,6 +171,100 @@ __be32 __skb_flow_get_ports(const struct sk_buff *skb, int thoff, u8 ip_proto,
 	return 0;
 }
 EXPORT_SYMBOL(__skb_flow_get_ports);
+
+static void __skb_flow_bpf_to_target(const struct bpf_flow_keys *flow_keys,
+ 				     struct flow_dissector *flow_dissector,
+ 				     void *target_container)
+{
+ 	struct flow_dissector_key_control *key_control;
+ 	struct flow_dissector_key_basic *key_basic;
+ 	struct flow_dissector_key_addrs *key_addrs;
+ 	struct flow_dissector_key_ports *key_ports;
+
+ 	key_control = skb_flow_dissector_target(flow_dissector,
+ 						FLOW_DISSECTOR_KEY_CONTROL,
+ 						target_container);
+ 	key_control->thoff = flow_keys->thoff;
+ 	if (flow_keys->is_frag)
+ 		key_control->flags |= FLOW_DIS_IS_FRAGMENT;
+ 	if (flow_keys->is_first_frag)
+ 		key_control->flags |= FLOW_DIS_FIRST_FRAG;
+ 	if (flow_keys->is_encap)
+ 		key_control->flags |= FLOW_DIS_ENCAPSULATION;
+
+ 	key_basic = skb_flow_dissector_target(flow_dissector,
+ 					      FLOW_DISSECTOR_KEY_BASIC,
+ 					      target_container);
+ 	key_basic->n_proto = flow_keys->n_proto;
+ 	key_basic->ip_proto = flow_keys->ip_proto;
+
+ 	if (flow_keys->addr_proto == ETH_P_IP &&
+ 	    dissector_uses_key(flow_dissector, FLOW_DISSECTOR_KEY_IPV4_ADDRS)) {
+ 		key_addrs = skb_flow_dissector_target(flow_dissector,
+ 						      FLOW_DISSECTOR_KEY_IPV4_ADDRS,
+ 						      target_container);
+ 		key_addrs->v4addrs.src = flow_keys->ipv4_src;
+ 		key_addrs->v4addrs.dst = flow_keys->ipv4_dst;
+ 		key_control->addr_type = FLOW_DISSECTOR_KEY_IPV4_ADDRS;
+ 	} else if (flow_keys->addr_proto == ETH_P_IPV6 &&
+ 		   dissector_uses_key(flow_dissector,
+ 				      FLOW_DISSECTOR_KEY_IPV6_ADDRS)) {
+ 		key_addrs = skb_flow_dissector_target(flow_dissector,
+ 						      FLOW_DISSECTOR_KEY_IPV6_ADDRS,
+ 						      target_container);
+ 		memcpy(&key_addrs->v6addrs, &flow_keys->ipv6_src,
+ 		       sizeof(key_addrs->v6addrs));
+ 		key_control->addr_type = FLOW_DISSECTOR_KEY_IPV6_ADDRS;
+ 	}
+
+ 	if (dissector_uses_key(flow_dissector, FLOW_DISSECTOR_KEY_PORTS)) {
+ 		key_ports = skb_flow_dissector_target(flow_dissector,
+ 						      FLOW_DISSECTOR_KEY_PORTS,
+ 						      target_container);
+ 		key_ports->src = flow_keys->sport;
+ 		key_ports->dst = flow_keys->dport;
+ 	}
+}
+
+bool __skb_flow_bpf_dissect(struct bpf_prog *prog,
+			    const struct sk_buff *skb,
+			    struct flow_dissector *flow_dissector,
+			    struct bpf_flow_keys *flow_keys)
+{
+	struct bpf_skb_data_end cb_saved;
+	struct bpf_skb_data_end *cb;
+	u32 result;
+
+	/* Note that even though the const qualifier is discarded
+	 * throughout the execution of the BPF program, all changes(the
+	 * control block) are reverted after the BPF program returns.
+	 * Therefore, __skb_flow_dissect does not alter the skb.
+	 */
+
+	cb = (struct bpf_skb_data_end *)skb->cb;
+
+	/* Save Control Block */
+	memcpy(&cb_saved, cb, sizeof(cb_saved));
+	memset(cb, 0, sizeof(*cb));
+
+	/* Pass parameters to the BPF program */
+	memset(flow_keys, 0, sizeof(*flow_keys));
+	cb->qdisc_cb.flow_keys = flow_keys;
+	flow_keys->nhoff = skb_network_offset(skb);
+	flow_keys->thoff = flow_keys->nhoff;
+
+	bpf_compute_data_pointers((struct sk_buff *)skb);
+	result = BPF_PROG_RUN(prog, skb);
+
+	/* Restore state */
+	memcpy(cb, &cb_saved, sizeof(cb_saved));
+
+	flow_keys->nhoff = clamp_t(u16, flow_keys->nhoff, 0, skb->len);
+	flow_keys->thoff = clamp_t(u16, flow_keys->thoff,
+				   flow_keys->nhoff, skb->len);
+
+	return result == BPF_OK;
+}
 
 /**
  * __skb_flow_dissect - extract the flow_keys struct and return it
@@ -145,6 +320,30 @@ bool __skb_flow_dissect(const struct sk_buff *skb,
 	key_basic = skb_flow_dissector_target(flow_dissector,
 					      FLOW_DISSECTOR_KEY_BASIC,
 					      target_container);
+
+	if (skb) {
+		struct bpf_flow_keys flow_keys;
+		struct bpf_prog *attached = NULL;
+
+		rcu_read_lock();
+
+		if (skb->dev)
+			attached = rcu_dereference(dev_net(skb->dev)->flow_dissector_prog);
+		else if (skb->sk)
+			attached = rcu_dereference(sock_net(skb->sk)->flow_dissector_prog);
+		else
+			WARN_ON_ONCE(1);
+		if (attached) {
+			ret = __skb_flow_bpf_dissect(attached, skb,
+						     flow_dissector,
+						     &flow_keys);
+			__skb_flow_bpf_to_target(&flow_keys, flow_dissector,
+						 target_container);
+			rcu_read_unlock();
+			return ret;
+		}
+ 		rcu_read_unlock();
+ 	}
 
 	if (dissector_uses_key(flow_dissector,
 			       FLOW_DISSECTOR_KEY_ETH_ADDRS)) {

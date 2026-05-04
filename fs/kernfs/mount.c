@@ -123,8 +123,10 @@ struct dentry *kernfs_node_dentry(struct kernfs_node *kn,
 		return dentry;
 
 	knparent = find_next_ancestor(kn, NULL);
-	if (WARN_ON(!knparent))
+	if (WARN_ON(!knparent)) {
+		dput(dentry);
 		return ERR_PTR(-EINVAL);
+	}
 
 	do {
 		struct dentry *dtmp;
@@ -133,8 +135,10 @@ struct dentry *kernfs_node_dentry(struct kernfs_node *kn,
 		if (kn == knparent)
 			return dentry;
 		kntmp = find_next_ancestor(kn, knparent);
-		if (WARN_ON(!kntmp))
+		if (WARN_ON(!kntmp)) {
+			dput(dentry);
 			return ERR_PTR(-EINVAL);
+		}
 		dtmp = lookup_one_len_unlocked(kntmp->name, dentry,
 					       strlen(kntmp->name));
 		dput(dentry);
@@ -330,6 +334,14 @@ struct super_block *kernfs_pin_sb(struct kernfs_root *root, const void *ns)
 
 void __init kernfs_init(void)
 {
+	init_kernfs_file_pool();
+
+	/*
+	 * the slab is freed in RCU context, so kernfs_find_and_get_node_by_ino
+	 * can access the slab lock free. This could introduce stale nodes,
+	 * please see how kernfs_find_and_get_node_by_ino filters out stale
+	 * nodes.
+	 */
 	kernfs_node_cache = kmem_cache_create("kernfs_node_cache",
 					      sizeof(struct kernfs_node),
 					      0, SLAB_PANIC, NULL);

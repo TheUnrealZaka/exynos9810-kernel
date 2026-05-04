@@ -94,6 +94,7 @@ int ipv4_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2,
 			 bool match_wildcard);
 int ipv6_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2,
 			 bool match_wildcard);
+int inet_rcv_saddr_any(const struct sock *sk);
 void addrconf_join_solict(struct net_device *dev, const struct in6_addr *addr);
 void addrconf_leave_solict(struct inet6_dev *idev, const struct in6_addr *addr);
 
@@ -222,6 +223,11 @@ extern const struct ipv6_stub *ipv6_stub __read_mostly;
 struct ipv6_bpf_stub {
 	int (*inet6_bind)(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 			  bool force_bind_address_no_port, bool with_lock);
+	struct sock *(*udp6_lib_lookup)(struct net *net,
+					const struct in6_addr *saddr, __be16 sport,
+					const struct in6_addr *daddr, __be16 dport,
+					int dif, int sdif, struct udp_table *tbl,
+					struct sk_buff *skb);
 };
 extern const struct ipv6_bpf_stub *ipv6_bpf_stub __read_mostly;
 

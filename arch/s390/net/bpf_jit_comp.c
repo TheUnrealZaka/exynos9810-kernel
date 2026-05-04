@@ -1339,7 +1339,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 	int pass;
 
 	if (!fp->jit_requested)
-		return orig_fp;
+		return fp;
 
 	tmp = bpf_jit_blind_constants(fp);
 	/*
@@ -1383,16 +1383,20 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 		goto free_addrs;
 	}
 	if (bpf_jit_prog(&jit, fp)) {
+		bpf_jit_binary_free(header);
 		fp = orig_fp;
 		goto free_addrs;
 	}
 	if (bpf_jit_enable > 1) {
 		bpf_jit_dump(fp->len, jit.size, pass, jit.prg_buf);
-		print_fn_code(jit.prg_buf, jit.size_prg);
+		if (jit.prg_buf)
+			print_fn_code(jit.prg_buf, jit.size_prg);
 	}
-	bpf_jit_binary_lock_ro(header);
-	fp->bpf_func = (void *) jit.prg_buf;
-	fp->jited = 1;
+	if (jit.prg_buf) {
+		bpf_jit_binary_lock_ro(header);
+		fp->bpf_func = (void *) jit.prg_buf;
+		fp->jited = 1;
+	}
 	fp->jited_len = jit.size;
 free_addrs:
 	kfree(jit.addrs);

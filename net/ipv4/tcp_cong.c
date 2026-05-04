@@ -198,6 +198,11 @@ static void tcp_reinit_congestion_control(struct sock *sk,
 	icsk->icsk_ca_setsockopt = 1;
 	memset(icsk->icsk_ca_priv, 0, sizeof(icsk->icsk_ca_priv));
 
+	if (ca->flags & TCP_CONG_NEEDS_ECN)
+		INET_ECN_xmit(sk);
+	else
+		INET_ECN_dontxmit(sk);
+
 	if (!((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN)))
 		tcp_init_congestion_control(sk);
 }
@@ -332,8 +337,13 @@ out:
 	return ret;
 }
 
-/* Change congestion control for socket */
-int tcp_set_congestion_control(struct sock *sk, const char *name)
+/* Change congestion control for socket. If load is false, then it is the
+ * responsibility of the caller to call tcp_init_congestion_control or
+ * tcp_reinit_congestion_control (if the current congestion control was
+ * already initialized.
+ */
+int tcp_set_congestion_control(struct sock *sk, const char *name, bool load,
+			       bool reinit, bool cap_net_admin)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	const struct tcp_congestion_ops *ca;
@@ -343,21 +353,37 @@ int tcp_set_congestion_control(struct sock *sk, const char *name)
 		return -EPERM;
 
 	rcu_read_lock();
-	ca = __tcp_ca_find_autoload(name);
+	if (!load)
+		ca = tcp_ca_find(name);
+	else
+		ca = __tcp_ca_find_autoload(name);
 	/* No change asking for existing value */
 	if (ca == icsk->icsk_ca_ops) {
 		icsk->icsk_ca_setsockopt = 1;
 		goto out;
 	}
-	if (!ca)
+	if (!ca) {
 		err = -ENOENT;
-	else if (!((ca->flags & TCP_CONG_NON_RESTRICTED) ||
-		   ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN)))
+	} else if (!load) {
+		const struct tcp_congestion_ops *old_ca = icsk->icsk_ca_ops;
+
+		if (try_module_get(ca->owner)) {
+			if (reinit) {
+				tcp_reinit_congestion_control(sk, ca);
+			} else {
+				icsk->icsk_ca_ops = ca;
+				module_put(old_ca->owner);
+			}
+		} else {
+			err = -EBUSY;
+		}
+	} else if (!((ca->flags & TCP_CONG_NON_RESTRICTED) || cap_net_admin)) {
 		err = -EPERM;
-	else if (!try_module_get(ca->owner))
+	} else if (!try_module_get(ca->owner)) {
 		err = -EBUSY;
-	else
+	} else {
 		tcp_reinit_congestion_control(sk, ca);
+	}
  out:
 	rcu_read_unlock();
 	return err;

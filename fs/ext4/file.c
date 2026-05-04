@@ -331,7 +331,7 @@ static int ext4_file_open(struct inode * inode, struct file * filp)
 	int ret;
 
 	if (unlikely(!(sbi->s_mount_flags & EXT4_MF_MNTDIR_SAMPLED) &&
-		     !(sb->s_flags & MS_RDONLY))) {
+		     !sb_rdonly(sb))) {
 		sbi->s_mount_flags |= EXT4_MF_MNTDIR_SAMPLED;
 		/*
 		 * Sample where the filesystem has been mounted and
@@ -699,7 +699,7 @@ const struct file_operations ext4_file_operations = {
 
 const struct inode_operations ext4_file_inode_operations = {
 	.setattr	= ext4_setattr,
-	.getattr	= ext4_getattr,
+	.getattr	= ext4_file_getattr,
 	.listxattr	= ext4_listxattr,
 	.get_acl	= ext4_get_acl,
 	.set_acl	= ext4_set_acl,

@@ -88,7 +88,13 @@ static struct bpf_map *cpu_map_alloc(union bpf_attr *attr)
 	if (!cmap)
 		return ERR_PTR(-ENOMEM);
 
-	bpf_map_init_from_attr(&cmap->map, attr);
+	/* mandatory map attributes */
+	cmap->map.map_type = attr->map_type;
+	cmap->map.key_size = attr->key_size;
+	cmap->map.value_size = attr->value_size;
+	cmap->map.max_entries = attr->max_entries;
+	cmap->map.map_flags = attr->map_flags;
+	cmap->map.numa_node = bpf_map_attr_numa_node(attr);
 
 	/* Pre-limit array size based on NR_CPUS, not final CPU check */
 	if (cmap->map.max_entries > NR_CPUS) {
@@ -139,7 +145,7 @@ void __cpu_map_queue_destructor(void *ptr)
 	 * gracefully and warn once.
 	 */
 	if (WARN_ON_ONCE(ptr))
-		page_frag_free(ptr);
+		__free_page_frag(ptr);
 }
 
 static void put_cpu_map_entry(struct bpf_cpu_map_entry *rcpu)
@@ -191,7 +197,7 @@ static int cpu_map_kthread_run(void *data)
 		/* Do work */
 		while ((xdp_pkt = ptr_ring_consume(rcpu->queue))) {
 			/* For now just "refcnt-free" */
-			page_frag_free(xdp_pkt);
+			__free_page_frag(xdp_pkt);
 		}
 		__set_current_state(TASK_INTERRUPTIBLE);
 	}
@@ -475,7 +481,7 @@ static int bq_flush_to_queue(struct bpf_cpu_map_entry *rcpu,
 		err = __ptr_ring_produce(q, xdp_pkt);
 		if (err) {
 			/* Free xdp_pkt */
-			page_frag_free(xdp_pkt);
+			__free_page_frag(xdp_pkt);
 		}
 	}
 	bq->count = 0;

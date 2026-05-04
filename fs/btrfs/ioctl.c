@@ -3593,7 +3593,7 @@ static int btrfs_clone(struct inode *src, struct inode *inode,
 	u64 last_dest_end = destoff;
 
 	ret = -ENOMEM;
-	buf = kmalloc(root->nodesize, GFP_KERNEL | __GFP_NOWARN);
+	buf = kvmalloc(root->nodesize, GFP_KERNEL | __GFP_NOWARN);
 	if (!buf) {
 		buf = vmalloc(root->nodesize);
 		if (!buf)
@@ -4513,7 +4513,7 @@ static long btrfs_ioctl_dev_replace(struct btrfs_root *root, void __user *arg)
 
 	switch (p->cmd) {
 	case BTRFS_IOCTL_DEV_REPLACE_CMD_START:
-		if (root->fs_info->sb->s_flags & MS_RDONLY) {
+		if (sb_rdonly(fs_info->sb)) {
 			ret = -EROFS;
 			goto out;
 		}

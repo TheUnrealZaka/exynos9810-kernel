@@ -29,4 +29,52 @@ enum path_flags {
 int aa_path_name(const struct path *path, int flags, char **buffer,
 		 const char **name, const char **info);
 
+#define MAX_PATH_BUFFERS 2
+
+/* Per cpu buffers used during mediation */
+/* preallocated buffers to use during path lookups */
+struct aa_buffers {
+	char *buf[MAX_PATH_BUFFERS];
+};
+
+#include <linux/percpu.h>
+#include <linux/preempt.h>
+
+DECLARE_PER_CPU(struct aa_buffers, aa_buffers);
+
+#define ASSIGN(FN, X, N) ((X) = FN(N))
+#define EVAL1(FN, X) ASSIGN(FN, X, 0) /*X = FN(0)*/
+#define EVAL2(FN, X, Y...) do { ASSIGN(FN, X, 1);  EVAL1(FN, Y); } while (0)
+#define EVAL(FN, X...) CONCATENATE(EVAL, COUNT_ARGS(X))(FN, X)
+
+#define for_each_cpu_buffer(I) for ((I) = 0; (I) < MAX_PATH_BUFFERS; (I)++)
+
+#ifdef CONFIG_DEBUG_PREEMPT
+#define AA_BUG_PREEMPT_ENABLED(X) AA_BUG(preempt_count() <= 0, X)
+#else
+#define AA_BUG_PREEMPT_ENABLED(X) /* nop */
+#endif
+
+#define __get_buffer(N) ({					\
+	struct aa_buffers *__cpu_var; \
+	AA_BUG_PREEMPT_ENABLED("__get_buffer without preempt disabled");  \
+	__cpu_var = this_cpu_ptr(&aa_buffers);			\
+	__cpu_var->buf[(N)]; })
+
+#define __get_buffers(X...)    EVAL(__get_buffer, X)
+
+#define __put_buffers(X, Y...) ((void)&(X))
+
+#define get_buffers(X...)	\
+do {				\
+	preempt_disable();	\
+	__get_buffers(X);	\
+} while (0)
+
+#define put_buffers(X, Y...)	\
+do {				\
+	__put_buffers(X, Y);	\
+	preempt_enable();	\
+} while (0)
+
 #endif /* __AA_PATH_H */

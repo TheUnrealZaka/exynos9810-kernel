@@ -280,6 +280,9 @@ static struct fq_flow *fq_classify(struct sk_buff *skb, struct fq_sched_data *q)
 				     f->socket_hash != sk->sk_hash)) {
 				f->credit = q->initial_quantum;
 				f->socket_hash = sk->sk_hash;
+				if (q->rate_enable)
+					smp_store_release(&sk->sk_pacing_status,
+							  SK_PACING_FQ);
 				if (fq_flow_is_throttled(f))
 					fq_flow_unset_throttled(q, f);
 				f->time_next_packet = 0ULL;
@@ -299,8 +302,12 @@ static struct fq_flow *fq_classify(struct sk_buff *skb, struct fq_sched_data *q)
 	}
 	fq_flow_set_detached(f);
 	f->sk = sk;
-	if (skb->sk)
+	if (skb->sk) {
 		f->socket_hash = sk->sk_hash;
+		if (q->rate_enable)
+			smp_store_release(&sk->sk_pacing_status,
+					  SK_PACING_FQ);
+	}
 	f->credit = q->initial_quantum;
 
 	rb_link_node(&f->fq_node, parent, p);

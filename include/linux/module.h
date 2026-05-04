@@ -439,6 +439,10 @@ struct module {
 	unsigned int num_tracepoints;
 	struct tracepoint * const *tracepoints_ptrs;
 #endif
+#ifdef CONFIG_BPF_EVENTS
+	unsigned int num_bpf_raw_events;
+	struct bpf_raw_event_map *bpf_raw_events;
+#endif
 #ifdef HAVE_JUMP_LABEL
 	struct jump_entry *jump_entries;
 	unsigned int num_jump_entries;
@@ -816,5 +820,15 @@ static inline bool module_sig_ok(struct module *module)
 	return true;
 }
 #endif	/* CONFIG_MODULE_SIG */
+
+#ifdef CONFIG_BPF_JIT
+const struct exception_table_entry *search_bpf_extables(unsigned long addr);
+#else
+static inline const struct exception_table_entry *
+search_bpf_extables(unsigned long addr)
+{
+	return NULL;
+}
+#endif
 
 #endif /* _LINUX_MODULE_H */

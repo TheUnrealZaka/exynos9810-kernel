@@ -11,16 +11,18 @@
  * General Public License for more details.
  */
 #include <linux/bpf.h>
+#include <linux/btf.h>
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
 #include <linux/filter.h>
 #include <linux/perf_event.h>
+#include <uapi/linux/btf.h>
 
 #include "map_in_map.h"
 
 #define ARRAY_CREATE_FLAG_MASK \
-	(BPF_F_NUMA_NODE | BPF_F_RDONLY | BPF_F_WRONLY)
+	(BPF_F_NUMA_NODE | BPF_F_MMAPABLE | BPF_F_ACCESS_MASK)
 
 static void bpf_array_free_percpu(struct bpf_array *array)
 {
@@ -52,6 +54,28 @@ static int bpf_array_alloc_percpu(struct bpf_array *array)
 }
 
 /* Called from syscall */
+int array_map_alloc_check(union bpf_attr *attr)
+{
+	bool percpu = attr->map_type == BPF_MAP_TYPE_PERCPU_ARRAY;
+	int numa_node = bpf_map_attr_numa_node(attr);
+
+	/* check sanity of attributes */
+	if (attr->max_entries == 0 || attr->key_size != 4 ||
+	    attr->value_size == 0 ||
+	    attr->map_flags & ~ARRAY_CREATE_FLAG_MASK ||
+	    !bpf_map_flags_access_ok(attr->map_flags) ||
+	    (percpu && numa_node != NUMA_NO_NODE))
+		return -EINVAL;
+
+	if (attr->value_size > KMALLOC_MAX_SIZE)
+		/* if value_size is bigger, the user space won't be able to
+		 * access the elements.
+		 */
+		return -E2BIG;
+
+	return 0;
+}
+
 static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 {
 	bool percpu = attr->map_type == BPF_MAP_TYPE_PERCPU_ARRAY;
@@ -60,19 +84,6 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 	bool unpriv = !capable(CAP_SYS_ADMIN);
 	u64 cost, array_size, mask64;
 	struct bpf_array *array;
-
-	/* check sanity of attributes */
-	if (attr->max_entries == 0 || attr->key_size != 4 ||
-	    attr->value_size == 0 ||
-	    attr->map_flags & ~ARRAY_CREATE_FLAG_MASK ||
-	    (percpu && numa_node != NUMA_NO_NODE))
-		return ERR_PTR(-EINVAL);
-
-	if (attr->value_size >= 1 << (KMALLOC_SHIFT_MAX - 1))
-		/* if value_size is bigger, the user space won't be able to
-		 * access the elements.
-		 */
-		return ERR_PTR(-E2BIG);
 
 	elem_size = round_up(attr->value_size, 8);
 
@@ -98,10 +109,19 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 	}
 
 	array_size = sizeof(*array);
-	if (percpu)
+	if (percpu) {
 		array_size += (u64) max_entries * sizeof(void *);
-	else
-		array_size += (u64) max_entries * elem_size;
+	} else {
+		/* rely on vmalloc() to return page-aligned memory and
+		 * ensure array->value is exactly page-aligned
+		 */
+		if (attr->map_flags & BPF_F_MMAPABLE) {
+			array_size = PAGE_ALIGN(array_size);
+			array_size += PAGE_ALIGN((u64) max_entries * elem_size);
+		} else {
+			array_size += (u64) max_entries * elem_size;
+		}
+	}
 
 	/* make sure there is no u32 overflow later in round_up() */
 	cost = array_size;
@@ -119,19 +139,26 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 		return ERR_PTR(ret);
 
 	/* allocate all map elements and zero-initialize them */
-	array = bpf_map_area_alloc(array_size, numa_node);
+	if (attr->map_flags & BPF_F_MMAPABLE) {
+		void *data;
+
+		/* kmalloc'ed memory can't be mmap'ed, use explicit vmalloc */
+		data = bpf_map_area_mmapable_alloc(array_size, numa_node);
+		if (!data) {
+			return ERR_PTR(-ENOMEM);
+		}
+		array = data + PAGE_ALIGN(sizeof(struct bpf_array))
+			- offsetof(struct bpf_array, value);
+	} else {
+		array = bpf_map_area_alloc(array_size, numa_node);
+	}
 	if (!array)
 		return ERR_PTR(-ENOMEM);
 	array->index_mask = index_mask;
 	array->map.unpriv_array = unpriv;
 
 	/* copy mandatory map attributes */
-	array->map.map_type = attr->map_type;
-	array->map.key_size = attr->key_size;
-	array->map.value_size = attr->value_size;
-	array->map.max_entries = attr->max_entries;
-	array->map.map_flags = attr->map_flags;
-	array->map.numa_node = numa_node;
+	bpf_map_init_from_attr(&array->map, attr);
 	array->map.pages = cost;
 	array->elem_size = elem_size;
 
@@ -157,9 +184,40 @@ static void *array_map_lookup_elem(struct bpf_map *map, void *key)
 	return array->value + array->elem_size * (index & array->index_mask);
 }
 
+static int array_map_direct_value_addr(const struct bpf_map *map, u64 *imm,
+				       u32 off)
+{
+	struct bpf_array *array = container_of(map, struct bpf_array, map);
+
+	if (map->max_entries != 1)
+		return -ENOTSUPP;
+	if (off >= map->value_size)
+		return -EINVAL;
+
+	*imm = (unsigned long)array->value;
+	return 0;
+}
+
+static int array_map_direct_value_meta(const struct bpf_map *map, u64 imm,
+				       u32 *off)
+{
+	struct bpf_array *array = container_of(map, struct bpf_array, map);
+	u64 base = (unsigned long)array->value;
+	u64 range = array->elem_size;
+
+	if (map->max_entries != 1)
+		return -ENOTSUPP;
+	if (imm < base || imm >= base + range)
+		return -ENOENT;
+
+	*off = imm - base;
+	return 0;
+}
+
 /* emit BPF instructions equivalent to C code of array_map_lookup_elem() */
 static u32 array_map_gen_lookup(struct bpf_map *map, struct bpf_insn *insn_buf)
 {
+	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	struct bpf_insn *insn = insn_buf;
 	u32 elem_size = round_up(map->value_size, 8);
 	const int ret = BPF_REG_0;
@@ -168,7 +226,12 @@ static u32 array_map_gen_lookup(struct bpf_map *map, struct bpf_insn *insn_buf)
 
 	*insn++ = BPF_ALU64_IMM(BPF_ADD, map_ptr, offsetof(struct bpf_array, value));
 	*insn++ = BPF_LDX_MEM(BPF_W, ret, index, 0);
-	*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 3);
+	if (map->unpriv_array) {
+		*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 4);
+		*insn++ = BPF_ALU32_IMM(BPF_AND, ret, array->index_mask);
+	} else {
+		*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 3);
+	}
 
 	if (is_power_of_2(elem_size)) {
 		*insn++ = BPF_ALU64_IMM(BPF_LSH, ret, ilog2(elem_size));
@@ -244,8 +307,9 @@ static int array_map_update_elem(struct bpf_map *map, void *key, void *value,
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	u32 index = *(u32 *)key;
+	char *val;
 
-	if (unlikely(map_flags > BPF_EXIST))
+	if (unlikely((map_flags & ~BPF_F_LOCK) > BPF_EXIST))
 		/* unknown flags */
 		return -EINVAL;
 
@@ -253,17 +317,25 @@ static int array_map_update_elem(struct bpf_map *map, void *key, void *value,
 		/* all elements were pre-allocated, cannot insert a new one */
 		return -E2BIG;
 
-	if (unlikely(map_flags == BPF_NOEXIST))
+	if (unlikely(map_flags & BPF_NOEXIST))
 		/* all elements already exist */
 		return -EEXIST;
 
-	if (array->map.map_type == BPF_MAP_TYPE_PERCPU_ARRAY)
+	if (unlikely((map_flags & BPF_F_LOCK) &&
+		     !map_value_has_spin_lock(map)))
+		return -EINVAL;
+
+	if (array->map.map_type == BPF_MAP_TYPE_PERCPU_ARRAY) {
 		memcpy(this_cpu_ptr(array->pptrs[index & array->index_mask]),
 		       value, map->value_size);
-	else
-		memcpy(array->value +
-		       array->elem_size * (index & array->index_mask),
-		       value, map->value_size);
+	} else {
+		val = array->value +
+			array->elem_size * (index & array->index_mask);
+		if (map_flags & BPF_F_LOCK)
+			copy_map_value_locked(map, val, value, false);
+		else
+			copy_map_value(map, val, value);
+	}
 	return 0;
 }
 
@@ -311,6 +383,11 @@ static int array_map_delete_elem(struct bpf_map *map, void *key)
 	return -EINVAL;
 }
 
+static void *array_map_vmalloc_addr(struct bpf_array *array)
+{
+	return (void *)round_down((unsigned long)array, PAGE_SIZE);
+}
+
 /* Called when map->refcnt goes to zero, either from workqueue or from syscall */
 static void array_map_free(struct bpf_map *map)
 {
@@ -326,10 +403,101 @@ static void array_map_free(struct bpf_map *map)
 	if (array->map.map_type == BPF_MAP_TYPE_PERCPU_ARRAY)
 		bpf_array_free_percpu(array);
 
-	bpf_map_area_free(array);
+	if (array->map.map_flags & BPF_F_MMAPABLE)
+		bpf_map_area_free(array_map_vmalloc_addr(array));
+	else
+		bpf_map_area_free(array);
+}
+
+static void array_map_seq_show_elem(struct bpf_map *map, void *key,
+				    struct seq_file *m)
+{
+	void *value;
+
+	rcu_read_lock();
+
+	value = array_map_lookup_elem(map, key);
+	if (!value) {
+		rcu_read_unlock();
+		return;
+	}
+
+	if (map->btf_key_type_id)
+		seq_printf(m, "%u: ", *(u32 *)key);
+	btf_type_seq_show(map->btf, map->btf_value_type_id, value, m);
+	seq_puts(m, "\n");
+
+	rcu_read_unlock();
+}
+
+static void percpu_array_map_seq_show_elem(struct bpf_map *map, void *key,
+					   struct seq_file *m)
+{
+	struct bpf_array *array = container_of(map, struct bpf_array, map);
+	u32 index = *(u32 *)key;
+	void __percpu *pptr;
+	int cpu;
+
+	rcu_read_lock();
+
+	seq_printf(m, "%u: {\n", *(u32 *)key);
+	pptr = array->pptrs[index & array->index_mask];
+	for_each_possible_cpu(cpu) {
+		seq_printf(m, "\tcpu%d: ", cpu);
+		btf_type_seq_show(map->btf, map->btf_value_type_id,
+				  per_cpu_ptr(pptr, cpu), m);
+		seq_puts(m, "\n");
+	}
+	seq_puts(m, "}\n");
+
+	rcu_read_unlock();
+}
+
+static int array_map_check_btf(const struct bpf_map *map,
+			       const struct btf *btf,
+			       const struct btf_type *key_type,
+			       const struct btf_type *value_type)
+{
+	u32 int_data;
+
+	/* One exception for keyless BTF: .bss/.data/.rodata map */
+	if (btf_type_is_void(key_type)) {
+		if (map->map_type != BPF_MAP_TYPE_ARRAY ||
+		    map->max_entries != 1)
+			return -EINVAL;
+
+		if (BTF_INFO_KIND(value_type->info) != BTF_KIND_DATASEC)
+			return -EINVAL;
+
+		return 0;
+	}
+
+	if (BTF_INFO_KIND(key_type->info) != BTF_KIND_INT)
+		return -EINVAL;
+
+	int_data = *(u32 *)(key_type + 1);
+	/* bpf array can only take a u32 key. This check makes sure
+	 * that the btf matches the attr used during map_create.
+	 */
+	if (BTF_INT_BITS(int_data) != 32 || BTF_INT_OFFSET(int_data))
+		return -EINVAL;
+
+	return 0;
+}
+
+int array_map_mmap(struct bpf_map *map, struct vm_area_struct *vma)
+{
+	struct bpf_array *array = container_of(map, struct bpf_array, map);
+	pgoff_t pgoff = PAGE_ALIGN(sizeof(*array)) >> PAGE_SHIFT;
+
+	if (!(map->map_flags & BPF_F_MMAPABLE))
+		return -EINVAL;
+
+	return remap_vmalloc_range(vma, array_map_vmalloc_addr(array), pgoff);
 }
 
 const struct bpf_map_ops array_map_ops = {
+	.map_alloc_check = array_map_alloc_check,
 	.map_alloc = array_map_alloc,
 	.map_free = array_map_free,
 	.map_get_next_key = array_map_get_next_key,
@@ -337,23 +505,34 @@ const struct bpf_map_ops array_map_ops = {
 	.map_update_elem = array_map_update_elem,
 	.map_delete_elem = array_map_delete_elem,
 	.map_gen_lookup = array_map_gen_lookup,
+	.map_direct_value_addr = array_map_direct_value_addr,
+	.map_direct_value_meta = array_map_direct_value_meta,
+	.map_mmap = array_map_mmap,
+	.map_seq_show_elem = array_map_seq_show_elem,
+	.map_check_btf = array_map_check_btf,
 };
 
 const struct bpf_map_ops percpu_array_map_ops = {
+	.map_alloc_check = array_map_alloc_check,
 	.map_alloc = array_map_alloc,
 	.map_free = array_map_free,
 	.map_get_next_key = array_map_get_next_key,
 	.map_lookup_elem = percpu_array_map_lookup_elem,
 	.map_update_elem = array_map_update_elem,
 	.map_delete_elem = array_map_delete_elem,
+	.map_seq_show_elem = percpu_array_map_seq_show_elem,
+	.map_check_btf = array_map_check_btf,
 };
 
-static struct bpf_map *fd_array_map_alloc(union bpf_attr *attr)
+static int fd_array_map_alloc_check(union bpf_attr *attr)
 {
 	/* only file descriptors can be stored in this type of map */
 	if (attr->value_size != sizeof(u32))
-		return ERR_PTR(-EINVAL);
-	return array_map_alloc(attr);
+		return -EINVAL;
+	/* Program read-only/write-only not supported for special maps yet. */
+	if (attr->map_flags & (BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG))
+		return -EINVAL;
+	return array_map_alloc_check(attr);
 }
 
 static void fd_array_map_free(struct bpf_map *map)
@@ -372,7 +551,27 @@ static void fd_array_map_free(struct bpf_map *map)
 
 static void *fd_array_map_lookup_elem(struct bpf_map *map, void *key)
 {
-	return NULL;
+	return ERR_PTR(-EOPNOTSUPP);
+}
+
+/* only called from syscall */
+int bpf_fd_array_map_lookup_elem(struct bpf_map *map, void *key, u32 *value)
+{
+	void **elem, *ptr;
+	int ret =  0;
+
+	if (!map->ops->map_fd_sys_lookup_elem)
+		return -ENOTSUPP;
+
+	rcu_read_lock();
+	elem = array_map_lookup_elem(map, key);
+	if (elem && (ptr = READ_ONCE(*elem)))
+		*value = map->ops->map_fd_sys_lookup_elem(ptr);
+	else
+		ret = -ENOENT;
+	rcu_read_unlock();
+
+	return ret;
 }
 
 /* only called from syscall */
@@ -441,8 +640,13 @@ static void prog_fd_array_put_ptr(void *ptr)
 	bpf_prog_put(ptr);
 }
 
+static u32 prog_fd_array_sys_lookup_elem(void *ptr)
+{
+	return ((struct bpf_prog *)ptr)->aux->id;
+}
+
 /* decrement refcnt of all bpf_progs that are stored in this map */
-void bpf_fd_array_map_clear(struct bpf_map *map)
+static void bpf_fd_array_map_clear(struct bpf_map *map)
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	int i;
@@ -452,13 +656,17 @@ void bpf_fd_array_map_clear(struct bpf_map *map)
 }
 
 const struct bpf_map_ops prog_array_map_ops = {
-	.map_alloc = fd_array_map_alloc,
+	.map_alloc_check = fd_array_map_alloc_check,
+	.map_alloc = array_map_alloc,
 	.map_free = fd_array_map_free,
 	.map_get_next_key = array_map_get_next_key,
 	.map_lookup_elem = fd_array_map_lookup_elem,
 	.map_delete_elem = fd_array_map_delete_elem,
 	.map_fd_get_ptr = prog_fd_array_get_ptr,
 	.map_fd_put_ptr = prog_fd_array_put_ptr,
+	.map_fd_sys_lookup_elem = prog_fd_array_sys_lookup_elem,
+	.map_release_uref = bpf_fd_array_map_clear,
+	.map_check_btf = map_check_no_btf,
 };
 
 static struct bpf_event_entry *bpf_event_entry_gen(struct file *perf_file,
@@ -552,7 +760,8 @@ static void perf_event_fd_array_release(struct bpf_map *map,
 }
 
 const struct bpf_map_ops perf_event_array_map_ops = {
-	.map_alloc = fd_array_map_alloc,
+	.map_alloc_check = fd_array_map_alloc_check,
+	.map_alloc = array_map_alloc,
 	.map_free = fd_array_map_free,
 	.map_get_next_key = array_map_get_next_key,
 	.map_lookup_elem = fd_array_map_lookup_elem,
@@ -560,6 +769,7 @@ const struct bpf_map_ops perf_event_array_map_ops = {
 	.map_fd_get_ptr = perf_event_fd_array_get_ptr,
 	.map_fd_put_ptr = perf_event_fd_array_put_ptr,
 	.map_release = perf_event_fd_array_release,
+	.map_check_btf = map_check_no_btf,
 };
 
 #ifdef CONFIG_CGROUPS
@@ -583,13 +793,15 @@ static void cgroup_fd_array_free(struct bpf_map *map)
 }
 
 const struct bpf_map_ops cgroup_array_map_ops = {
-	.map_alloc = fd_array_map_alloc,
+	.map_alloc_check = fd_array_map_alloc_check,
+	.map_alloc = array_map_alloc,
 	.map_free = cgroup_fd_array_free,
 	.map_get_next_key = array_map_get_next_key,
 	.map_lookup_elem = fd_array_map_lookup_elem,
 	.map_delete_elem = fd_array_map_delete_elem,
 	.map_fd_get_ptr = cgroup_fd_array_get_ptr,
 	.map_fd_put_ptr = cgroup_fd_array_put_ptr,
+	.map_check_btf = map_check_no_btf,
 };
 #endif
 
@@ -601,7 +813,7 @@ static struct bpf_map *array_of_map_alloc(union bpf_attr *attr)
 	if (IS_ERR(inner_map_meta))
 		return inner_map_meta;
 
-	map = fd_array_map_alloc(attr);
+	map = array_map_alloc(attr);
 	if (IS_ERR(map)) {
 		bpf_map_meta_free(inner_map_meta);
 		return map;
@@ -632,7 +844,39 @@ static void *array_of_map_lookup_elem(struct bpf_map *map, void *key)
 	return READ_ONCE(*inner_map);
 }
 
+static u32 array_of_map_gen_lookup(struct bpf_map *map,
+				   struct bpf_insn *insn_buf)
+{
+	struct bpf_array *array = container_of(map, struct bpf_array, map);
+	u32 elem_size = round_up(map->value_size, 8);
+	struct bpf_insn *insn = insn_buf;
+	const int ret = BPF_REG_0;
+	const int map_ptr = BPF_REG_1;
+	const int index = BPF_REG_2;
+
+	*insn++ = BPF_ALU64_IMM(BPF_ADD, map_ptr, offsetof(struct bpf_array, value));
+	*insn++ = BPF_LDX_MEM(BPF_W, ret, index, 0);
+	if (map->unpriv_array) {
+		*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 6);
+		*insn++ = BPF_ALU32_IMM(BPF_AND, ret, array->index_mask);
+	} else {
+		*insn++ = BPF_JMP_IMM(BPF_JGE, ret, map->max_entries, 5);
+	}
+	if (is_power_of_2(elem_size))
+		*insn++ = BPF_ALU64_IMM(BPF_LSH, ret, ilog2(elem_size));
+	else
+		*insn++ = BPF_ALU64_IMM(BPF_MUL, ret, elem_size);
+	*insn++ = BPF_ALU64_REG(BPF_ADD, ret, map_ptr);
+	*insn++ = BPF_LDX_MEM(BPF_DW, ret, ret, 0);
+	*insn++ = BPF_JMP_IMM(BPF_JEQ, ret, 0, 1);
+	*insn++ = BPF_JMP_IMM(BPF_JA, 0, 0, 1);
+	*insn++ = BPF_MOV64_IMM(ret, 0);
+
+	return insn - insn_buf;
+}
+
 const struct bpf_map_ops array_of_maps_map_ops = {
+	.map_alloc_check = fd_array_map_alloc_check,
 	.map_alloc = array_of_map_alloc,
 	.map_free = array_of_map_free,
 	.map_get_next_key = array_map_get_next_key,
@@ -640,4 +884,7 @@ const struct bpf_map_ops array_of_maps_map_ops = {
 	.map_delete_elem = fd_array_map_delete_elem,
 	.map_fd_get_ptr = bpf_map_fd_get_ptr,
 	.map_fd_put_ptr = bpf_map_fd_put_ptr,
+	.map_fd_sys_lookup_elem = bpf_map_fd_sys_lookup_elem,
+	.map_gen_lookup = array_of_map_gen_lookup,
+	.map_check_btf = map_check_no_btf,
 };
