@@ -1,0 +1,63 @@
+
+
+#ifndef __LM3560_H__
+#define __LM3560_H__
+
+#include <media/v4l2-subdev.h>
+
+#define LM3560_NAME	"lm3560"
+#define LM3560_I2C_ADDR	(0x53)
+
+
+#define LM3560_FLASH_BRT_MIN 62500
+#define LM3560_FLASH_BRT_STEP 62500
+#define LM3560_FLASH_BRT_MAX 1000000
+#define LM3560_FLASH_BRT_uA_TO_REG(a)	\
+	((a) < LM3560_FLASH_BRT_MIN ? 0 :	\
+	 (((a) - LM3560_FLASH_BRT_MIN) / LM3560_FLASH_BRT_STEP))
+#define LM3560_FLASH_BRT_REG_TO_uA(a)		\
+	((a) * LM3560_FLASH_BRT_STEP + LM3560_FLASH_BRT_MIN)
+
+
+#define LM3560_FLASH_TOUT_MIN 32
+#define LM3560_FLASH_TOUT_STEP 32
+#define LM3560_FLASH_TOUT_MAX 1024
+#define LM3560_FLASH_TOUT_ms_TO_REG(a)	\
+	((a) < LM3560_FLASH_TOUT_MIN ? 0 :	\
+	 (((a) - LM3560_FLASH_TOUT_MIN) / LM3560_FLASH_TOUT_STEP))
+#define LM3560_FLASH_TOUT_REG_TO_ms(a)		\
+	((a) * LM3560_FLASH_TOUT_STEP + LM3560_FLASH_TOUT_MIN)
+
+
+#define LM3560_TORCH_BRT_MIN 31250
+#define LM3560_TORCH_BRT_STEP 31250
+#define LM3560_TORCH_BRT_MAX 250000
+#define LM3560_TORCH_BRT_uA_TO_REG(a)	\
+	((a) < LM3560_TORCH_BRT_MIN ? 0 :	\
+	 (((a) - LM3560_TORCH_BRT_MIN) / LM3560_TORCH_BRT_STEP))
+#define LM3560_TORCH_BRT_REG_TO_uA(a)		\
+	((a) * LM3560_TORCH_BRT_STEP + LM3560_TORCH_BRT_MIN)
+
+enum lm3560_led_id {
+	LM3560_LED0 = 0,
+	LM3560_LED1,
+	LM3560_LED_MAX
+};
+
+enum lm3560_peak_current {
+	LM3560_PEAK_1600mA = 0x00,
+	LM3560_PEAK_2300mA = 0x20,
+	LM3560_PEAK_3000mA = 0x40,
+	LM3560_PEAK_3600mA = 0x60
+};
+
+
+struct lm3560_platform_data {
+	enum lm3560_peak_current peak;
+
+	u32 max_flash_timeout;
+	u32 max_flash_brt[LM3560_LED_MAX];
+	u32 max_torch_brt[LM3560_LED_MAX];
+};
+
+#endif 

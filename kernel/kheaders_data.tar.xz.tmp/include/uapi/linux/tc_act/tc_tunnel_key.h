@@ -1,0 +1,33 @@
+
+
+#ifndef __LINUX_TC_TUNNEL_KEY_H
+#define __LINUX_TC_TUNNEL_KEY_H
+
+#include <linux/pkt_cls.h>
+
+#define TCA_ACT_TUNNEL_KEY 17
+
+#define TCA_TUNNEL_KEY_ACT_SET	    1
+#define TCA_TUNNEL_KEY_ACT_RELEASE  2
+
+struct tc_tunnel_key {
+	tc_gen;
+	int t_action;
+};
+
+enum {
+	TCA_TUNNEL_KEY_UNSPEC,
+	TCA_TUNNEL_KEY_TM,
+	TCA_TUNNEL_KEY_PARMS,
+	TCA_TUNNEL_KEY_ENC_IPV4_SRC,	
+	TCA_TUNNEL_KEY_ENC_IPV4_DST,	
+	TCA_TUNNEL_KEY_ENC_IPV6_SRC,	
+	TCA_TUNNEL_KEY_ENC_IPV6_DST,	
+	TCA_TUNNEL_KEY_ENC_KEY_ID,	
+	TCA_TUNNEL_KEY_PAD,
+	__TCA_TUNNEL_KEY_MAX,
+};
+
+#define TCA_TUNNEL_KEY_MAX (__TCA_TUNNEL_KEY_MAX - 1)
+
+#endif

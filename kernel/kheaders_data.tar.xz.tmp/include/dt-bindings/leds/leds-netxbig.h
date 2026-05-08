@@ -1,0 +1,12 @@
+
+
+#ifndef _DT_BINDINGS_LEDS_NETXBIG_H
+#define _DT_BINDINGS_LEDS_NETXBIG_H
+
+#define NETXBIG_LED_OFF		0
+#define NETXBIG_LED_ON		1
+#define NETXBIG_LED_SATA	2
+#define NETXBIG_LED_TIMER1	3
+#define NETXBIG_LED_TIMER2	4
+
+#endif 

@@ -1,0 +1,46 @@
+
+
+#ifndef _LP8755_H
+#define _LP8755_H
+
+#include <linux/regulator/consumer.h>
+
+#define LP8755_NAME "lp8755-regulator"
+
+#define LP8755_EVENT_PWR_FAULT REGULATOR_EVENT_FAIL
+#define LP8755_EVENT_OCP REGULATOR_EVENT_OVER_CURRENT
+#define LP8755_EVENT_OVP 0x10000
+#define LP8755_EVENT_TEMP_WARN 0x2000
+#define LP8755_EVENT_TEMP_SHDN REGULATOR_EVENT_OVER_TEMP
+#define LP8755_EVENT_I_LOAD	0x40000
+
+enum lp8755_bucks {
+	LP8755_BUCK0 = 0,
+	LP8755_BUCK1,
+	LP8755_BUCK2,
+	LP8755_BUCK3,
+	LP8755_BUCK4,
+	LP8755_BUCK5,
+	LP8755_BUCK_MAX,
+};
+
+
+enum lp8755_mphase_config {
+	MPHASE_CONF0,
+	MPHASE_CONF1,
+	MPHASE_CONF2,
+	MPHASE_CONF3,
+	MPHASE_CONF4,
+	MPHASE_CONF5,
+	MPHASE_CONF6,
+	MPHASE_CONF7,
+	MPHASE_CONF8,
+	MPHASE_CONF_MAX
+};
+
+
+struct lp8755_platform_data {
+	int mphase;
+	struct regulator_init_data *buck_data[LP8755_BUCK_MAX];
+};
+#endif

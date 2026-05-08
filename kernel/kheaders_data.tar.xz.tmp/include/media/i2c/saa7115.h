@@ -1,0 +1,94 @@
+
+
+#ifndef _SAA7115_H_
+#define _SAA7115_H_
+
+
+
+
+#define SAA7115_COMPOSITE0 0
+#define SAA7115_COMPOSITE1 1
+#define SAA7115_COMPOSITE2 2
+#define SAA7115_COMPOSITE3 3
+#define SAA7115_COMPOSITE4 4 
+#define SAA7115_COMPOSITE5 5 
+#define SAA7115_SVIDEO0    6
+#define SAA7115_SVIDEO1    7
+#define SAA7115_SVIDEO2    8
+#define SAA7115_SVIDEO3    9
+
+
+#define SAA7115_IPORT_ON    	1
+#define SAA7115_IPORT_OFF   	0
+
+
+#define SAA7111_VBI_BYPASS 	2
+#define SAA7111_FMT_YUV422      0x00
+#define SAA7111_FMT_RGB 	0x40
+#define SAA7111_FMT_CCIR 	0x80
+#define SAA7111_FMT_YUV411 	0xc0
+
+
+
+#define SAA7115_IDQ_IS_DEFAULT  (1 << 0)
+
+
+
+
+#define SAA7115_FREQ_32_11_MHZ  32110000   
+#define SAA7115_FREQ_24_576_MHZ 24576000   
+
+
+#define SAA7115_FREQ_FL_UCGC         (1 << 0) 
+#define SAA7115_FREQ_FL_CGCDIV       (1 << 1) 
+#define SAA7115_FREQ_FL_APLL         (1 << 2) 
+#define SAA7115_FREQ_FL_DOUBLE_ASCLK (1 << 3) 
+
+
+
+
+enum saa7113_r08_htc {
+	SAA7113_HTC_TV_MODE = 0x00,
+	SAA7113_HTC_VTR_MODE,			
+	SAA7113_HTC_FAST_LOCKING_MODE = 0x03	
+};
+
+
+enum saa7113_r10_ofts {
+	SAA7113_OFTS_ITU_656 = 0x0,	
+	SAA7113_OFTS_VFLAG_BY_VREF,
+	SAA7113_OFTS_VFLAG_BY_DATA_TYPE
+};
+
+
+enum saa7113_r12_rts {
+	SAA7113_RTS_DOT_IN = 0,		
+	SAA7113_RTS_VIPB,		
+	SAA7113_RTS_GPSW,
+	SAA7115_RTS_HL,
+	SAA7113_RTS_VL,
+	SAA7113_RTS_DL,
+	SAA7113_RTS_PLIN,
+	SAA7113_RTS_HREF_HS,		
+	SAA7113_RTS_HS,
+	SAA7113_RTS_HQ,
+	SAA7113_RTS_ODD,
+	SAA7113_RTS_VS,
+	SAA7113_RTS_V123,
+	SAA7113_RTS_VGATE,
+	SAA7113_RTS_VREF,
+	SAA7113_RTS_FID
+};
+
+
+struct saa7115_platform_data {
+	bool saa7113_force_gm7113c_init;
+	enum saa7113_r08_htc *saa7113_r08_htc;
+	bool *saa7113_r10_vrln;
+	enum saa7113_r10_ofts *saa7113_r10_ofts;
+	enum saa7113_r12_rts *saa7113_r12_rts0;
+	enum saa7113_r12_rts *saa7113_r12_rts1;
+	bool *saa7113_r13_adlsb;
+};
+
+#endif

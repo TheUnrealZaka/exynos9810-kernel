@@ -1,0 +1,19 @@
+
+
+#ifndef __BQ24260_CHARGER_H
+#define __BQ24260_CHARGER_H __FILE__
+
+
+#define SEC_CHARGER_I2C_SLAVEADDR	(0x6B)
+
+
+#define BQ24260_STATUS		0x00
+#define BQ24260_CONTROL		0x01
+#define BQ24260_VOLTAGE		0x02
+#define BQ24260_VENDOR		0x03
+#define BQ24260_CURRENT		0x04
+#define BQ24260_SPECIAL		0x05
+#define BQ24260_SAFETY		0x06
+
+#endif 
+
