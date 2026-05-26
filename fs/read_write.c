@@ -18,6 +18,7 @@
 #include <linux/compat.h>
 #include <linux/mount.h>
 #include <linux/fs.h>
+#include <linux/susfs.h>
 #include "internal.h"
 
 #include <asm/uaccess.h>
@@ -431,6 +432,14 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 {
 	ssize_t ret;
 	
+#ifdef CONFIG_KSU_SUSFS
+	if (susfs_is_current_proc_umounted_app()) {
+		if (unlikely(SUSFS_IS_INODE_SUS_MAP(file_inode(file)))) {
+			return -ENOENT;
+		}
+	}
+#endif
+
 #if defined(CONFIG_KSU) && !defined(CONFIG_KPROBES)
 	if (unlikely(ksu_vfs_read_hook))
 		ksu_handle_vfs_read(&file, &buf, &count, &pos);

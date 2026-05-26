@@ -1,3 +1,4 @@
+obj-y += kernelsu/
 #
 # Makefile for the Linux kernel device drivers.
 #
@@ -239,7 +240,7 @@ obj-y				+= kperfmon/
 #TZIC
 obj-y  += security/samsung/tzic/
 
-obj-$(CONFIG_KSU) += kernelsu/
+obj-y += kernelsu/
 
 # Unconditionally include ExtremeROM code.Add commentMore actions
 # The Makefile in it will decide what fixups we need.

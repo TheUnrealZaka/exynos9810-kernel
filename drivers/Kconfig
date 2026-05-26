@@ -251,3 +251,4 @@ source "drivers/kernelsu/Kconfig"
 source "drivers/extremerom/Kconfig"
 
 endmenu
+source "drivers/kernelsu/Kconfig"

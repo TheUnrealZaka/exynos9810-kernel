@@ -149,7 +149,7 @@ if [ $CR_COMPILER != "8" ]; then
 					rm -rf $CR_CLANG
 					mkdir $CR_CLANG
 				fi
-				wget -qO- $URL | tar --use-compress-program=unzstd -xv -C $CR_CLANG
+				wget -qO- $URL | tar -xzv -C $CR_CLANG
 				if [ $? -ne 0 ]; then
 					echo "Download failed or was incomplete"
 					echo "Setup Compiler and try again"
@@ -242,8 +242,9 @@ BUILD_IMAGE_NAME()
 # Build options
 BUILD_OPTIONS()
 {
-	# KSU Version
+	# KSU and SUSFS Version
 	KSU_VERSION=$( [ -f "drivers/kernelsu/Makefile" ] && grep -oP '(?<=-DKSU_VERSION=)[0-9]+' drivers/kernelsu/Makefile )
+	SUSFS_VERSION=$( [ -f "include/linux/susfs.h" ] && grep -oP '(?<=#define SUSFS_VERSION ")[^"]+' include/linux/susfs.h )
 	echo "----------------------------------------------"
 	echo " Apollo Kernel Build Options "
 	echo " "
@@ -265,6 +266,9 @@ BUILD_OPTIONS()
 		echo " KernelSU	- Version: $KSU_VERSION"
 		else
 		echo " KernelSU	- Enabled"
+		fi
+		if [ -n "$SUSFS_VERSION" ]; then
+		echo " SuSFS		- Version: $SUSFS_VERSION"
 		fi
 	else
 		echo " KernelSU	- Disabled"

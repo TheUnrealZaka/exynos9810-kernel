@@ -14,6 +14,7 @@
 #include <linux/security.h>
 #include <linux/syscalls.h>
 #include <linux/pagemap.h>
+#include <linux/susfs.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -192,6 +193,11 @@ retry:
 		goto out;
 
 	error = vfs_getattr(&path, stat, request_mask, flags);
+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+	if (!error) {
+		susfs_sus_kstat_spoof_generic_fillattr(path.dentry->d_inode, stat);
+	}
+#endif
 	path_put(&path);
 	if (retry_estale(error, lookup_flags)) {
 		lookup_flags |= LOOKUP_REVAL;

@@ -28,6 +28,7 @@
 #include <linux/audit.h>
 #include <linux/falloc.h>
 #include <linux/fs_struct.h>
+#include <linux/susfs.h>
 #include <linux/ima.h>
 #include <linux/dnotify.h>
 #include <linux/compat.h>
@@ -364,25 +365,43 @@ extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int
 			 int *flags);
 #endif
 
+#ifdef CONFIG_KSU_SUSFS
+extern struct static_key_true ksu_su_compat_enabled;
+extern bool __ksu_is_allow_uid_for_current(uid_t uid);
+extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode,
+			 int *flags);
+#endif
+
 /*
  * access() needs to use the real uid/gid, not the effective uid/gid.
  * We do this by temporarily clearing all FS-related capabilities and
  * switching the fsuid/fsgid around to the real ones.
  */
+extern struct static_key_true ksu_su_compat_enabled;
+extern bool __ksu_is_allow_uid_for_current(uid_t uid);
+extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);
+
 SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
 {
-	const struct cred *old_cred;
-	struct cred *override_cred;
-	struct path path;
-	struct inode *inode;
-	struct vfsmount *mnt;
-	int res;
-	unsigned int lookup_flags = LOOKUP_FOLLOW;
-	
-#if defined(CONFIG_KSU) && !defined(CONFIG_KPROBES)
-	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
-#endif
+        const struct cred *old_cred;
+        struct cred *override_cred;
+        struct path path;
+        struct inode *inode;
+        struct vfsmount *mnt;
+        int res;
+        unsigned int lookup_flags = LOOKUP_FOLLOW;
 
+#ifdef CONFIG_KSU_SUSFS
+	if (likely(susfs_is_current_proc_umounted()))
+		goto orig_flow;
+
+	if (static_branch_likely(&ksu_su_compat_enabled)) {
+		if (unlikely(__ksu_is_allow_uid_for_current(current_uid().val)))
+			ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
+	}
+
+orig_flow:
+#endif
 	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
 		return -EINVAL;
 
@@ -1103,8 +1122,26 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 		return PTR_ERR(tmp);
 
 	fd = get_unused_fd_flags(flags);
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+retry:
+#endif
 	if (fd >= 0) {
 		struct file *f = do_filp_open(dfd, tmp, &op);
+
+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+		if (f && !IS_ERR(f)) {
+			struct inode *inode = file_inode(f);
+			if (SUSFS_IS_INODE_OPEN_REDIRECT_WITHOUT_UID_CHECK(inode)) {
+				struct filename *fake_filename = susfs_open_redirect_spoof_do_sys_openat(inode);
+				if (fake_filename && !IS_ERR(fake_filename)) {
+					filp_close(f, NULL);
+					putname(tmp);
+					tmp = fake_filename;
+					goto retry;
+				}
+			}
+		}
+#endif
 
 #ifdef CONFIG_SECURITY_DEFEX
 		if (!IS_ERR(f) && task_defex_enforce(current, f, -__NR_openat)) {
