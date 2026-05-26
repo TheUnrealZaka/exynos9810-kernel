@@ -76,6 +76,8 @@ if echo $device | grep '[GN]96[05][FN]'; then
     fi
 
     ui_print "- Installing DS-ACK-V12 Kernel"
+    ui_print "- With KernelSU-Next and SuSFS support"
+    ui_print "- Modified by TheUnrealZaka"
     cd /tmp/floyd && rm -rf /tmp/floydKernel && mkdir -p /tmp/floydKernel && cd /tmp/floydKernel
     cp /tmp/floyd/tools/magiskboot imgtool && chmod 777 imgtool
     dd if=$boot of=/tmp/floydKernel/old-boot.img bs=4096

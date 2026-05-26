@@ -558,14 +558,14 @@ exit 0;
 BUILD_GITHUB_RELEASE(){
 echo "----------------------------------------------"
 echo " Initiating Automated GitHub Release Build "
-echo " This will compile 4 ZIPs (Enforcing/Permissive + KSU/No-KSU)"
+echo " This will compile 2 ZIPs (Enforcing/Permissive + KSU/SusFS)"
 echo " Note: Performing 1 initial clean, then using dirty builds to save time."
 echo "----------------------------------------------"
 
 CR_MKZIP="y"
 CR_CLEAN="n"
 
-echo "=== [0/4] Initial Workspace Cleanup ==="
+echo "=== [0/2] Initial Workspace Cleanup ==="
 rm -r -f $CR_DTB
 rm -r -f $CR_KERNEL
 rm -rf $CR_DTS/.*.tmp
@@ -578,33 +578,21 @@ rm -rf $CR_OUTZIP
 echo " Cleanup done. Starting fast incremental builds..."
 echo "----------------------------------------------"
 
-# 1. Enforcing, No KSU
-echo "=== [1/4] Building Enforcing - No KSU ==="
-CR_SELINUX=2
-CR_KSU="n"
-BUILD_ALL
-
-# 2. Enforcing, KSU
-echo "=== [2/4] Building Enforcing - KernelSU ==="
+# 1. Enforcing, KSU
+echo "=== [1/2] Building Enforcing - KernelSU ==="
 CR_SELINUX=2
 CR_KSU="y"
 BUILD_ALL
 
-# 3. Permissive, No KSU
-echo "=== [3/4] Building Permissive - No KSU ==="
-CR_SELINUX=1
-CR_KSU="n"
-BUILD_ALL
-
-# 4. Permissive, KSU
-echo "=== [4/4] Building Permissive - KernelSU ==="
+# 2. Permissive, KSU
+echo "=== [2/2] Building Permissive - KernelSU ==="
 CR_SELINUX=1
 CR_KSU="y"
 BUILD_ALL
 
 echo "----------------------------------------------"
 echo " GitHub Release Builds Completed Successfully! "
-echo " Check $CR_PRODUCT directory for your 4 new ZIP files."
+echo " Check $CR_PRODUCT directory for your 2 new ZIP files."
 echo "----------------------------------------------"
 exit 0;
 }
