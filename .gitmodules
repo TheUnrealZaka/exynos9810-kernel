@@ -1,3 +1,8 @@
 [submodule "KernelSU"]
-	path = KernelSU
+	path = drivers/kernelsu
 	url = https://github.com/KernelSU-Next/KernelSU-Next/
+	branch = legacy-susfs
+[submodule "drivers/kernelsu"]
+	path = drivers/kernelsu
+	url = https://github.com/KernelSU-Next/KernelSU-Next.git
+	branch = legacy-susfs

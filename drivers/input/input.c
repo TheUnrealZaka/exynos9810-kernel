@@ -382,6 +382,12 @@ extern bool ksu_input_hook __read_mostly;
 extern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);
 #endif
 
+#ifdef CONFIG_KSU_SUSFS
+extern struct static_key_true ksu_is_input_hook_enabled;
+extern __attribute__((cold)) int ksu_handle_input_handle_event(
+			unsigned int *type, unsigned int *code, int *value);
+#endif
+
 static void input_handle_event(struct input_dev *dev,
 			       unsigned int type, unsigned int code, int value)
 {
@@ -389,6 +395,11 @@ static void input_handle_event(struct input_dev *dev,
 	
 #if defined(CONFIG_KSU) && !defined(CONFIG_KPROBES)
 	if (unlikely(ksu_input_hook))
+		ksu_handle_input_handle_event(&type, &code, &value);
+#endif
+
+#ifdef CONFIG_KSU_SUSFS
+	if (static_branch_unlikely(&ksu_is_input_hook_enabled))
 		ksu_handle_input_handle_event(&type, &code, &value);
 #endif
 

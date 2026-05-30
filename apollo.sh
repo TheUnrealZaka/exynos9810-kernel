@@ -244,6 +244,7 @@ BUILD_OPTIONS()
 {
 	# KSU Version
 	KSU_VERSION=$( [ -f "drivers/kernelsu/Makefile" ] && grep -oP '(?<=-DKSU_VERSION=)[0-9]+' drivers/kernelsu/Makefile )
+	SUSFS_VERSION=$( [ -f "include/linux/susfs.h" ] && grep -oP '(?<=#define SUSFS_VERSION "v?)[0-9.]+' include/linux/susfs.h )
 	echo "----------------------------------------------"
 	echo " Apollo Kernel Build Options "
 	echo " "
@@ -263,6 +264,7 @@ BUILD_OPTIONS()
 	if [[ "$CR_KSU" =~ ^[yY]$ ]]; then
 		if [ -n "$KSU_VERSION" ]; then
 		echo " KernelSU	- Version: $KSU_VERSION"
+		echo " SuSFS      - Version: $SUSFS_VERSION"
 		else
 		echo " KernelSU	- Enabled"
 		fi
@@ -313,7 +315,19 @@ BUILD_GENERATE_CONFIG()
   if [[ "$CR_KSU" =~ ^[yY]$ ]]; then
     echo " Building KernelSU"
     echo "CONFIG_KSU=y" >> $CR_DEFCONFIG/tmp_defconfig
-    CR_IMAGE_NAME=$CR_IMAGE_NAME-KSU
+    echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_KSU_SUSFS=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> $CR_DEFCONFIG/tmp_defconfig
+    echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> $CR_DEFCONFIG/tmp_defconfig
+    CR_IMAGE_NAME=$CR_IMAGE_NAME-Enforcing-KernelSU-SuSFS
     zver=$zver-KernelSU
   else
     echo "# CONFIG_KSU is not set" >> $CR_DEFCONFIG/tmp_defconfig
@@ -328,6 +342,7 @@ BUILD_OUT()
 {
 # KSU Version
 	KSU_VERSION=$( [ -f "drivers/kernelsu/Makefile" ] && grep -oP '(?<=-DKSU_VERSION=)[0-9]+' drivers/kernelsu/Makefile )
+	SUSFS_VERSION=$( [ -f "include/linux/susfs.h" ] && grep -oP '(?<=#define SUSFS_VERSION "v?)[0-9.]+' include/linux/susfs.h )
   echo "----------------------------------------------"
   echo " Kernel		- $CR_IMAGE_NAME"
   echo " Device		- $CR_VARIANT"
@@ -343,6 +358,7 @@ BUILD_OUT()
 		echo " SELinux	- Enforcing"
 	fi
   echo " KernelSU	- Version: $KSU_VERSION"
+  echo " SuSFS      - Version: $SUSFS_VERSION"
   echo "----------------------------------------------"
   echo "$CR_VARIANT kernel build finished."
   echo "Compiled DTB Size = $sizdT Kb"
@@ -554,7 +570,7 @@ exit 0;
 BUILD_GITHUB_RELEASE(){
 echo "----------------------------------------------"
 echo " Initiating Automated GitHub Release Build "
-echo " This will compile 4 ZIPs (Enforcing/Permissive + KSU/No-KSU)"
+echo " This will compile 2 ZIPs (Enforcing/Permissive + KSU )"
 echo " Note: Performing 1 initial clean, then using dirty builds to save time."
 echo "----------------------------------------------"
 
@@ -574,33 +590,21 @@ rm -rf $CR_OUTZIP
 echo " Cleanup done. Starting fast incremental builds..."
 echo "----------------------------------------------"
 
-# 1. Enforcing, No KSU
-echo "=== [1/4] Building Enforcing - No KSU ==="
-CR_SELINUX=2
-CR_KSU="n"
-BUILD_ALL
-
-# 2. Enforcing, KSU
-echo "=== [2/4] Building Enforcing - KernelSU ==="
+# 1. Enforcing, KernelSU + SuSFS
+echo "=== [1/2] Building Enforcing - KernelSU + SuSFS ==="
 CR_SELINUX=2
 CR_KSU="y"
 BUILD_ALL
 
-# 3. Permissive, No KSU
-echo "=== [3/4] Building Permissive - No KSU ==="
-CR_SELINUX=1
-CR_KSU="n"
-BUILD_ALL
-
-# 4. Permissive, KSU
-echo "=== [4/4] Building Permissive - KernelSU ==="
+# 2. Permissive, KSU
+echo "=== [2/2] Building Permissive - KernelSU + SuSFS ==="
 CR_SELINUX=1
 CR_KSU="y"
 BUILD_ALL
 
 echo "----------------------------------------------"
 echo " GitHub Release Builds Completed Successfully! "
-echo " Check $CR_PRODUCT directory for your 4 new ZIP files."
+echo " Check $CR_PRODUCT directory for your 2 new ZIP files."
 echo "----------------------------------------------"
 exit 0;
 }
